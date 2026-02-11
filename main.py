@@ -9,6 +9,9 @@ from typing import Dict, List, Optional, Union, Literal
 import requests
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
+from dotenv import load_dotenv
+
+load_dotenv()
 
 APP_NAME = "Agentic Honey-Pot"
 
@@ -64,7 +67,10 @@ KEYWORD_WEIGHTS = {
 }
 
 URL_PATTERN = re.compile(r"(https?://\S+|www\.\S+)", re.IGNORECASE)
-UPI_PATTERN = re.compile(r"\b[\w.\-]{2,}@[a-zA-Z]{2,}\b")
+UPI_URL_PARAM = re.compile(r'(?i)[?&]pa=([a-z0-9.\-_]+@[a-z0-9]+)')
+UPI_PATTERN = re.compile(
+    r'(?i)\b[a-z0-9.\-_]{2,}@(?:upi|ybl|ibl|okaxis|oksbi|okicici|paytm|phonepe|axl|apl)\b'
+)
 PHONE_PATTERN = re.compile(r"\b(?:\+?\d{1,3}[\s-]?)?(?:\d{10})\b")
 BANK_PATTERN = re.compile(r"\b\d{9,18}\b")
 IFSC_PATTERN = re.compile(r"\b[A-Z]{4}0[0-9A-Z]{6}\b")
@@ -213,8 +219,13 @@ def extract_intelligence(texts: List[str], intel: Intelligence) -> None:
         cleaned = match.rstrip("),.;")
         intel.phishing_links.add(cleaned)
 
+    # Extract UPI IDs from URL parameters (e.g., ?pa=merchant@ybl)
+    for match in UPI_URL_PARAM.findall(combined):
+        intel.upi_ids.add(match.lower())
+
+    # Extract UPI IDs from plain text (e.g., "pay to user@paytm")
     for match in UPI_PATTERN.findall(combined):
-        intel.upi_ids.add(match)
+        intel.upi_ids.add(match.lower())
 
     for match in PHONE_PATTERN.findall(combined):
         intel.phone_numbers.add(_normalize_phone(match))
