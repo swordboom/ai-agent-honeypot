@@ -1,4 +1,5 @@
-﻿import hashlib
+import hashlib
+import json
 import logging
 import os
 import random
@@ -236,6 +237,19 @@ class Intelligence:
     def has_actionable(self) -> bool:
         return any([self.bank_accounts, self.upi_ids, self.phishing_links, self.phone_numbers])
 
+    def actionable_category_count(self) -> int:
+        return sum(
+            [
+                1 if self.bank_accounts else 0,
+                1 if self.upi_ids else 0,
+                1 if self.phishing_links else 0,
+                1 if self.phone_numbers else 0,
+            ]
+        )
+
+    def has_high_value(self) -> bool:
+        return any([self.bank_accounts, self.upi_ids, self.phishing_links])
+
     def to_payload(self) -> Dict[str, List[str]]:
         return {
             "bankAccounts": sorted(self.bank_accounts),
@@ -264,6 +278,7 @@ class SessionState:
     agent_notes: str = ""
     finalized: bool = False
     callback_sent: bool = False
+    callback_payload_signature: Optional[str] = None
     reply_provider: str = "rules"
 
 
@@ -707,19 +722,30 @@ def should_finalize(state: SessionState) -> bool:
     if state.finalized or not state.scam_detected:
         return False
 
-    has_actionable = state.intel.has_actionable()
+    actionable_categories = state.intel.actionable_category_count()
+    has_high_value = state.intel.has_high_value()
 
-    if state.agent_turns >= 6:
+    # Hard stop to avoid never-ending sessions.
+    if state.agent_turns >= 8:
         return True
-    if state.agent_turns >= 2 and has_actionable:
+
+    # Strong extraction signal: multiple actionable categories quickly collected.
+    if actionable_categories >= 3 and state.agent_turns >= 2:
         return True
-    if state.agent_turns >= 1 and has_actionable and state.last_score >= STRONG_THRESHOLD:
+
+    # Balanced extraction signal: at least one high-value indicator plus another actionable signal.
+    if has_high_value and actionable_categories >= 2 and state.agent_turns >= 3:
         return True
+
+    # Conversation-depth fallback when high-value intel exists.
+    if has_high_value and state.scammer_messages >= 4 and state.agent_turns >= 4:
+        return True
+
     return False
 
 
-def send_final_callback(state: SessionState, total_messages: int) -> None:
-    payload = {
+def build_callback_payload(state: SessionState, total_messages: int) -> Dict[str, Union[str, bool, int, Dict[str, List[str]]]]:
+    return {
         "sessionId": state.session_id,
         "scamDetected": state.scam_detected,
         "totalMessagesExchanged": total_messages,
@@ -727,10 +753,30 @@ def send_final_callback(state: SessionState, total_messages: int) -> None:
         "agentNotes": state.agent_notes,
     }
 
+
+def callback_payload_signature(payload: Dict[str, Union[str, bool, int, Dict[str, List[str]]]]) -> str:
+    serialized = json.dumps(payload, sort_keys=True)
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def callback_has_updates(state: SessionState, total_messages: int) -> bool:
+    payload = build_callback_payload(state, total_messages)
+    signature = callback_payload_signature(payload)
+    return signature != state.callback_payload_signature
+
+
+def send_final_callback(state: SessionState, total_messages: int) -> None:
+    payload = build_callback_payload(state, total_messages)
+    payload_signature = callback_payload_signature(payload)
+
+    if payload_signature == state.callback_payload_signature:
+        return
+
     try:
         response = requests.post(CALLBACK_ENDPOINT, json=payload, timeout=5)
         response.raise_for_status()
         state.callback_sent = True
+        state.callback_payload_signature = payload_signature
         logger.info("Final callback sent for session %s", state.session_id)
     except Exception as exc:
         logger.warning("Failed to send final callback for %s: %s", state.session_id, exc)
@@ -954,8 +1000,10 @@ async def handle_message(event: MessageEvent, x_api_key: Optional[str] = Header(
     if should_finalize(state):
         state.finalized = True
         state.finalized_timestamp = time.time()
+
+    if state.finalized:
         state.agent_notes = build_agent_notes(state)
-        if not state.callback_sent:
+        if callback_has_updates(state, total_messages):
             send_final_callback(state, total_messages)
 
     response = {
