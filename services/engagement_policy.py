@@ -7,22 +7,22 @@ def should_finalize(state: SessionState) -> bool:
 
     actionable_categories = state.intel.actionable_category_count()
     has_high_value = state.intel.has_high_value()
+    has_payment_id = bool(state.intel.upi_ids or state.intel.crypto_wallets)
 
     # Hard stop to avoid never-ending sessions.
-    if state.agent_turns >= 10:
+    if state.agent_turns >= 12:
         return True
 
-    # Strong extraction signal: multiple actionable categories quickly collected.
-    if actionable_categories >= 3 and state.agent_turns >= 3:
+    # If we captured a direct payment identifier, we can wrap up sooner.
+    if has_payment_id and actionable_categories >= 2 and state.agent_turns >= 5:
         return True
 
-    # Balanced signal: one high-value indicator plus another actionable signal.
-    if has_high_value and actionable_categories >= 2 and state.agent_turns >= 5:
+    # Strong extraction signal (but require more depth so we don't close before getting UPI, etc).
+    if actionable_categories >= 3 and state.agent_turns >= 10:
         return True
 
-    # Conversation-depth fallback when high-value intel exists.
-    if has_high_value and state.scammer_messages >= 5 and state.agent_turns >= 6:
+    # Last resort for very chatty scammers.
+    if state.scammer_messages >= 12 and state.agent_turns >= 10:
         return True
 
     return False
-
