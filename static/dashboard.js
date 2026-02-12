@@ -47,6 +47,10 @@ function sessionRowMarkup(item) {
     <div><strong>${item.sessionId}</strong></div>
     <div>${item.persona}</div>
     <div class="row">
+      <span>${item.scamCategory} (${Math.round((item.scamConfidence || 0) * 100)}%)</span>
+      <span>provider: ${item.replyProvider || "?"}</span>
+    </div>
+    <div class="row">
       <span>msgs: ${item.messageCount}</span>
       <span>scam: ${item.scamDetected}</span>
       <span>done: ${item.engagementComplete}</span>
@@ -81,7 +85,10 @@ function renderSessions(sessions) {
 
 function renderSessionDetail(detail) {
   const meta = document.getElementById("sessionMeta");
-  meta.textContent = `${detail.sessionId} | ${detail.persona} | provider=${detail.replyProvider} | callback=${detail.callbackSent}`;
+  const conf = Math.round((detail.scamConfidence || 0) * 100);
+  const cb = `callback=${detail.callbackSent} attempts=${detail.callbackAttempts || 0} status=${detail.callbackLastStatus || "-"}`;
+  const err = detail.callbackLastError ? ` error=${detail.callbackLastError}` : "";
+  meta.textContent = `${detail.sessionId} | ${detail.persona} | ${detail.scamCategory} (${conf}%) | provider=${detail.replyProvider} | ${cb}${err} | wasted=${detail.timeWastedSeconds}s | msgs=${detail.totalMessages}`;
 
   const transcript = document.getElementById("transcript");
   transcript.innerHTML = "";
@@ -100,6 +107,11 @@ function renderSessionDetail(detail) {
 
   const intel = document.getElementById("intel");
   intel.textContent = JSON.stringify(detail.extractedIntelligence, null, 2);
+
+  const intelExtended = document.getElementById("intelExtended");
+  if (intelExtended) {
+    intelExtended.textContent = JSON.stringify(detail.extendedIntelligence || {}, null, 2);
+  }
 }
 
 function renderMap(points) {

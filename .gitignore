@@ -15,6 +15,7 @@ ENV/
 # Environment files
 .env
 .env.*
+!.env.example
 
 # Editor/OS
 .vscode/
@@ -34,6 +35,6 @@ htmlcov/
 build/
 dist/
 
-tests/
-
+# Local-only helpers (do not commit secrets/tools)
 main_local.py
+tests/main_local.py
