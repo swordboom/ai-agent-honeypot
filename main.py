@@ -1,4 +1,4 @@
-import hashlib
+﻿import hashlib
 import json
 import logging
 import os
@@ -619,7 +619,7 @@ def generate_rule_based_reply(state: SessionState) -> str:
                 ],
                 last_reply,
             )
-        if "upi" in missing:
+        elif "upi" in missing:
             return _pick_non_repeating(
                 [
                     "My UPI app is not showing any request. What UPI ID should I use?",
@@ -638,7 +638,7 @@ def generate_rule_based_reply(state: SessionState) -> str:
                 ],
                 last_reply,
             )
-        if "account" in missing:
+        elif "account" in missing:
             return _pick_non_repeating(
                 [
                     "Before I proceed, can you confirm the account number or IFSC for verification?",
@@ -664,7 +664,7 @@ def generate_rule_based_reply(state: SessionState) -> str:
             ],
             last_reply,
         )
-    if "link" in missing:
+    elif "link" in missing:
         return _pick_non_repeating(
             [
                 "I still cannot open the link. Please send it again or the official site.",
@@ -672,7 +672,7 @@ def generate_rule_based_reply(state: SessionState) -> str:
             ],
             last_reply,
         )
-    if "phone" in missing:
+    elif "phone" in missing:
         return _pick_non_repeating(
             [
                 "Can you share a callback number? I do not want to miss any update.",
