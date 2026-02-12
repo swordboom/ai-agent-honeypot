@@ -35,3 +35,5 @@ build/
 dist/
 
 tests/
+
+main_local.py
