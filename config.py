@@ -65,6 +65,7 @@ class Settings:
 
     agent_max_history_messages: int
     llm_timeout_seconds: int
+    request_timeout_budget_seconds: int
     enable_llm_behavior_analysis: bool
     high_load_mode: bool
     llm_global_rpm_limit: int
@@ -92,7 +93,7 @@ class Settings:
         # Load local .env if present (Docker/Render will ignore due to .dockerignore / missing file).
         load_dotenv()
         return Settings(
-            api_key=os.getenv("HONEY_POT_API_KEY") or os.getenv("API_KEY") or "dev-key",
+            api_key=os.getenv("HONEY_POT_API_KEY") or os.getenv("API_KEY") or "",
             dashboard_key=os.getenv("HONEY_POT_DASHBOARD_KEY") or "",
             callback_url=os.getenv(
                 "HONEY_POT_CALLBACK_URL",
@@ -105,6 +106,7 @@ class Settings:
             gemini_model=os.getenv("GEMINI_MODEL") or "gemini-1.5-flash",
             agent_max_history_messages=_env_int("AGENT_MAX_HISTORY_MESSAGES", 12),
             llm_timeout_seconds=_env_int("LLM_TIMEOUT_SECONDS", 10),
+            request_timeout_budget_seconds=_env_int("REQUEST_TIMEOUT_BUDGET_SECONDS", 26),
             enable_llm_behavior_analysis=_env_bool("ENABLE_LLM_BEHAVIOR_ANALYSIS", True),
             high_load_mode=_env_bool("HIGH_LOAD_MODE", False),
             llm_global_rpm_limit=_env_int("LLM_GLOBAL_RPM_LIMIT", 26),
@@ -125,5 +127,5 @@ class Settings:
             callback_backoff_base_seconds=_env_int("CALLBACK_BACKOFF_BASE_SECONDS", 1),
             callback_max_workers=_env_int("CALLBACK_MAX_WORKERS", 4),
             enable_callback_updates=_env_bool("ENABLE_CALLBACK_UPDATES", True),
-            callback_max_updates=_env_int("CALLBACK_MAX_UPDATES", 2),
+            callback_max_updates=_env_int("CALLBACK_MAX_UPDATES", 10),
         )

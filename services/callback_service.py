@@ -112,4 +112,3 @@ class CallbackService:
         state = self._sessions.get(session_id)
         if state and last_error:
             self._sessions.update_callback_state(state, last_error=last_error)
-

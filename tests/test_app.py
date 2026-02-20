@@ -176,3 +176,37 @@ class HoneypotTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(updated.finalized)
         self.assertTrue(updated.closed)
         self.assertGreaterEqual(len(callback_calls), 1)
+
+    async def test_api_allows_requests_when_api_key_not_configured(self):
+        original = main.API_KEY
+        main.API_KEY = ""
+        try:
+            event = MessageEvent(
+                sessionId="no-auth-session",
+                message=Message(sender="scammer", text="hello", timestamp=1),
+                conversationHistory=[],
+                metadata=Metadata(channel="SMS", language="English", locale="IN"),
+            )
+            resp = await main.handle_message(event, x_api_key=None)
+            self.assertEqual(resp["status"], "success")
+        finally:
+            main.API_KEY = original
+
+    def test_callback_payload_contains_required_fields_and_enriched_intelligence(self):
+        state = SessionState(session_id="cb-1", persona_id="retired_teacher", persona_label="Arthur")
+        state.scam_detected = True
+        state.finalized = True
+        state.scam_category = "BANK_FRAUD"
+        state.scam_confidence = 0.87
+        state.first_scam_timestamp = time.time() - 90
+        state.finalized_timestamp = time.time()
+        state.intel.phone_numbers.add("+919876543210")
+        state.intel.emails.add("fraud@example.com")
+        state.intel.case_ids.add("CASE12345")
+
+        payload = main.callback_service.build_payload(state, total_messages=8)
+        self.assertEqual(payload["sessionId"], "cb-1")
+        self.assertTrue(payload["scamDetected"])
+        self.assertEqual(payload["totalMessagesExchanged"], 8)
+        self.assertIn("emailAddresses", payload["extractedIntelligence"])
+        self.assertIn("caseIds", payload["extractedIntelligence"])

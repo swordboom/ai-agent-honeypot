@@ -53,13 +53,18 @@ def _final_output_payload(state, now_ts: float) -> Dict[str, object]:
         state.updated_at,
         now_ts,
     )
+    total_messages = state.final_total_messages_exchanged or len(state.transcript)
     return {
+        "sessionId": state.session_id,
         "status": "completed" if state.finalized else "in_progress",
         "scamDetected": state.scam_detected,
         "scamType": state.scam_category,
+        "confidenceLevel": round(min(1.0, max(0.0, state.scam_confidence)), 2),
         "extractedIntelligence": state.intel.to_callback_payload(),
+        "totalMessagesExchanged": total_messages,
+        "engagementDurationSeconds": duration,
         "engagementMetrics": {
-            "totalMessagesExchanged": state.final_total_messages_exchanged or len(state.transcript),
+            "totalMessagesExchanged": total_messages,
             "engagementDurationSeconds": duration,
         },
         "agentNotes": state.agent_notes,
@@ -72,6 +77,10 @@ def _intel_counts(intel) -> DashboardIntelCounts:
         upiIds=len(intel.upi_ids),
         phishingLinks=len(intel.phishing_links),
         phoneNumbers=len(intel.phone_numbers),
+        emailAddresses=len(intel.emails),
+        caseIds=len(intel.case_ids.union(intel.reference_ids)),
+        policyNumbers=len(intel.policy_numbers),
+        orderNumbers=len(intel.order_numbers),
         referenceIds=len(intel.reference_ids),
         amounts=len(intel.amounts),
         emails=len(intel.emails),
@@ -96,6 +105,9 @@ class DashboardService:
         all_upi = set()
         all_links = set()
         all_phones = set()
+        all_case_ids = set()
+        all_policy_numbers = set()
+        all_order_numbers = set()
         all_ref = set()
         all_amounts = set()
         all_emails = set()
@@ -119,6 +131,9 @@ class DashboardService:
             all_upi.update(state.intel.upi_ids)
             all_links.update(state.intel.phishing_links)
             all_phones.update(state.intel.phone_numbers)
+            all_case_ids.update(state.intel.case_ids)
+            all_policy_numbers.update(state.intel.policy_numbers)
+            all_order_numbers.update(state.intel.order_numbers)
             all_ref.update(state.intel.reference_ids)
             all_amounts.update(state.intel.amounts)
             all_emails.update(state.intel.emails)
@@ -135,6 +150,10 @@ class DashboardService:
                 upiIds=len(all_upi),
                 phishingLinks=len(all_links),
                 phoneNumbers=len(all_phones),
+                emailAddresses=len(all_emails),
+                caseIds=len(all_case_ids.union(all_ref)),
+                policyNumbers=len(all_policy_numbers),
+                orderNumbers=len(all_order_numbers),
                 referenceIds=len(all_ref),
                 amounts=len(all_amounts),
                 emails=len(all_emails),

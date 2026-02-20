@@ -20,6 +20,9 @@ class Intelligence:
     suspicious_keywords: set = field(default_factory=set)
 
     reference_ids: set = field(default_factory=set)
+    case_ids: set = field(default_factory=set)
+    policy_numbers: set = field(default_factory=set)
+    order_numbers: set = field(default_factory=set)
     amounts: set = field(default_factory=set)
     emails: set = field(default_factory=set)
     crypto_wallets: set = field(default_factory=set)
@@ -49,12 +52,19 @@ class Intelligence:
             "upiIds": sorted(self.upi_ids),
             "phishingLinks": sorted(self.phishing_links),
             "phoneNumbers": sorted(self.phone_numbers),
+            "emailAddresses": sorted(self.emails),
+            "caseIds": sorted(self.case_ids.union(self.reference_ids)),
+            "policyNumbers": sorted(self.policy_numbers),
+            "orderNumbers": sorted(self.order_numbers),
             "suspiciousKeywords": sorted(self.suspicious_keywords),
         }
 
     def to_extended_payload(self) -> Dict[str, List[str]]:
         return {
             "referenceIds": sorted(self.reference_ids),
+            "caseIds": sorted(self.case_ids),
+            "policyNumbers": sorted(self.policy_numbers),
+            "orderNumbers": sorted(self.order_numbers),
             "amounts": sorted(self.amounts),
             "emails": sorted(self.emails),
             "cryptoWallets": sorted(self.crypto_wallets),
@@ -67,10 +77,17 @@ class Intelligence:
         self.upi_ids.update(payload.get("upiIds", []))
         self.phishing_links.update(payload.get("phishingLinks", []))
         self.phone_numbers.update(payload.get("phoneNumbers", []))
+        self.emails.update(payload.get("emailAddresses", []))
+        self.case_ids.update(payload.get("caseIds", []))
+        self.policy_numbers.update(payload.get("policyNumbers", []))
+        self.order_numbers.update(payload.get("orderNumbers", []))
         self.suspicious_keywords.update(payload.get("suspiciousKeywords", []))
 
     def merge_extended_payload(self, payload: Dict[str, List[str]]) -> None:
         self.reference_ids.update(payload.get("referenceIds", []))
+        self.case_ids.update(payload.get("caseIds", []))
+        self.policy_numbers.update(payload.get("policyNumbers", []))
+        self.order_numbers.update(payload.get("orderNumbers", []))
         self.amounts.update(payload.get("amounts", []))
         self.emails.update(payload.get("emails", []))
         self.crypto_wallets.update(payload.get("cryptoWallets", []))

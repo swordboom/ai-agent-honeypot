@@ -28,7 +28,7 @@ Dashboard API endpoints require header `x-dashboard-key`.
 ## Environment Variables
 
 ### Required
-- `HONEY_POT_API_KEY` or `API_KEY`
+- `HONEY_POT_API_KEY` or `API_KEY` (optional; if set, request must include `x-api-key`)
 - `HONEY_POT_DASHBOARD_KEY` (for dashboard APIs)
 
 ### LLM (recommended)
@@ -40,6 +40,7 @@ Dashboard API endpoints require header `x-dashboard-key`.
 ### Optional
 - `AGENT_MAX_HISTORY_MESSAGES` (default: `12`)
 - `LLM_TIMEOUT_SECONDS` (default: `10`)
+- `REQUEST_TIMEOUT_BUDGET_SECONDS` (default: `26`, caps optional LLM stages to stay under evaluator timeout)
 - `ENABLE_LLM_BEHAVIOR_ANALYSIS` (default: `true`)
 - `HIGH_LOAD_MODE` (default: `false`)
 - `LLM_GLOBAL_RPM_LIMIT` (default: `26`)
@@ -58,7 +59,7 @@ Dashboard API endpoints require header `x-dashboard-key`.
 - `CALLBACK_BACKOFF_BASE_SECONDS` (default: `1`)
 - `CALLBACK_MAX_WORKERS` (default: `4`)
 - `ENABLE_CALLBACK_UPDATES` (default: `true`)
-- `CALLBACK_MAX_UPDATES` (default: `2`)
+- `CALLBACK_MAX_UPDATES` (default: `10`)
 - `HONEY_POT_EXTENDED_RESPONSE` (`true` to include extra debug fields in `/api/message` response)
 
 ## Local Run
@@ -118,8 +119,9 @@ python -m unittest discover -s tests -p "test_*.py"
 - Session and metrics are in-memory by design for hackathon speed.
 - API response contract remains minimal by default: `{"status":"success","reply":"..."}`.
 - When `HONEY_POT_EXTENDED_RESPONSE=true`, response includes `finalResult` with:
-  - `status`, `scamDetected`, `scamType`, `extractedIntelligence`, `engagementMetrics`, `agentNotes`
-- Final callback payload remains evaluator-compatible.
+  - `sessionId`, `status`, `scamDetected`, `scamType`, `confidenceLevel`, `extractedIntelligence`, `totalMessagesExchanged`, `engagementDurationSeconds`, `engagementMetrics`, `agentNotes`
+- Extracted intelligence includes: phone numbers, bank accounts, UPI IDs, phishing links, email addresses, case IDs, policy numbers, order numbers.
+- Final callback payload remains evaluator-compatible (`sessionId`, `scamDetected`, `totalMessagesExchanged`, `extractedIntelligence`, `agentNotes`).
 
 ## Render Deployment (Docker)
 

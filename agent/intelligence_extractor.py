@@ -15,6 +15,13 @@ BANK_PATTERN = re.compile(r"\b\d{9,18}\b")
 IFSC_PATTERN = re.compile(r"\b[A-Z]{4}0[0-9A-Z]{6}\b")
 
 REFERENCE_ID_PATTERN = re.compile(r"(?i)\b(?:ref(?:erence)?\s*id\s*[:\-]?\s*)?([A-Z]{2,5}\d{3,})\b")
+CASE_ID_PATTERN = re.compile(r"(?i)\b(?:case|ticket|complaint)\s*(?:id|no|number)?\s*[:\-]?\s*([A-Z0-9-]{5,})\b")
+POLICY_NUMBER_PATTERN = re.compile(
+    r"(?i)\b(?:policy)\s*(?:id|no|number)?\s*[:\-]?\s*([A-Z0-9-]{6,})\b"
+)
+ORDER_NUMBER_PATTERN = re.compile(
+    r"(?i)\b(?:order)\s*(?:id|no|number)?\s*[:\-]?\s*([A-Z0-9-]{5,})\b"
+)
 # Currency can appear as ₹, Rs, or INR. Use \u20B9 escape for portability (keeps source ASCII).
 AMOUNT_PATTERN = re.compile("(?i)\\b(?:\u20B9|rs\\.?|inr)\\s*[\\d,]+(?:\\.\\d{1,2})?\\b")
 
@@ -104,6 +111,19 @@ def extract_intelligence(texts: Iterable[str], intel: Intelligence) -> None:
     for match in REFERENCE_ID_PATTERN.findall(combined):
         if match and len(match) >= 6:
             intel.reference_ids.add(match.upper())
+            intel.case_ids.add(match.upper())
+
+    for match in CASE_ID_PATTERN.findall(combined):
+        if match:
+            intel.case_ids.add(match.upper())
+
+    for match in POLICY_NUMBER_PATTERN.findall(combined):
+        if match:
+            intel.policy_numbers.add(match.upper())
+
+    for match in ORDER_NUMBER_PATTERN.findall(combined):
+        if match:
+            intel.order_numbers.add(match.upper())
 
     for match in AMOUNT_PATTERN.findall(combined):
         intel.amounts.add(match.replace(" ", ""))

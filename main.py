@@ -57,6 +57,7 @@ GEMINI_API_KEY = settings.gemini_api_key
 GEMINI_MODEL = settings.gemini_model
 AGENT_MAX_HISTORY_MESSAGES = settings.agent_max_history_messages
 LLM_TIMEOUT_SECONDS = settings.llm_timeout_seconds
+REQUEST_TIMEOUT_BUDGET_SECONDS = max(5, settings.request_timeout_budget_seconds)
 
 ENABLE_LLM_EXTRACTION = settings.enable_llm_extraction
 LLM_EXTRACTION_MIN_INTERVAL_SECONDS = settings.llm_extraction_min_interval_seconds
@@ -101,6 +102,9 @@ class DebugTextRequest(BaseModel):
 
 
 def _require_api_key(x_api_key: Optional[str]) -> None:
+    # If API key is not configured, run in open mode.
+    if not API_KEY:
+        return
     if not x_api_key or x_api_key != API_KEY:
         raise HTTPException(status_code=401, detail="Invalid API key")
 
@@ -131,11 +135,6 @@ def _collect_scammer_texts(event: MessageEvent) -> List[str]:
     return texts
 
 
-def _compute_total_messages(event: MessageEvent) -> int:
-    # history + current + our reply
-    return len(event.conversationHistory) + 2
-
-
 def _engagement_duration_seconds(state: SessionState) -> int:
     if state.first_scam_timestamp is None:
         return 0
@@ -144,14 +143,20 @@ def _engagement_duration_seconds(state: SessionState) -> int:
 
 
 def _build_final_output(state: SessionState, total_messages: int) -> Dict[str, object]:
+    engagement_duration = _engagement_duration_seconds(state)
+    confidence = round(min(1.0, max(0.0, state.scam_confidence)), 2)
     return {
+        "sessionId": state.session_id,
         "status": "completed" if state.finalized else "in_progress",
         "scamDetected": state.scam_detected,
         "scamType": state.scam_category,
+        "confidenceLevel": confidence,
         "extractedIntelligence": state.intel.to_callback_payload(),
+        "totalMessagesExchanged": total_messages,
+        "engagementDurationSeconds": engagement_duration,
         "engagementMetrics": {
             "totalMessagesExchanged": total_messages,
-            "engagementDurationSeconds": _engagement_duration_seconds(state),
+            "engagementDurationSeconds": engagement_duration,
         },
         "agentNotes": state.agent_notes or build_agent_notes(state),
     }
@@ -216,6 +221,10 @@ def _closed_reply(state: SessionState) -> str:
     if state.persona_id == "retired_teacher":
         return "I will visit the bank and check. I will reply later."
     return "I will check this with the bank. Please wait."
+
+
+def _has_time_budget(deadline_ts: float, reserve_seconds: float) -> bool:
+    return time.time() + reserve_seconds < deadline_ts
 
 
 @app.get("/health")
@@ -328,6 +337,7 @@ async def debug_send_callback(session_id: str, x_dashboard_key: Optional[str] = 
 @app.post("/api/message")
 async def handle_message(event: MessageEvent, x_api_key: Optional[str] = Header(None)):
     _require_api_key(x_api_key)
+    request_deadline = time.time() + REQUEST_TIMEOUT_BUDGET_SECONDS
     session_manager.maybe_cleanup()
     _auto_finalize_inactive_sessions(skip_session_id=event.sessionId)
     openai_client = _openai_client()
@@ -343,7 +353,7 @@ async def handle_message(event: MessageEvent, x_api_key: Optional[str] = Header(
         if state.finalized and not state.callback_sent:
             callback_service.send_async(
                 state,
-                total_messages=state.final_total_messages_exchanged or _compute_total_messages(event),
+                total_messages=state.final_total_messages_exchanged or len(state.transcript),
             )
         return {"status": "success", "reply": reply}
 
@@ -357,6 +367,7 @@ async def handle_message(event: MessageEvent, x_api_key: Optional[str] = Header(
     allow_behavior_llm = (
         ENABLE_LLM_BEHAVIOR_ANALYSIS
         and event.message.sender == "scammer"
+        and _has_time_budget(request_deadline, (2 * LLM_TIMEOUT_SECONDS) + 1)
         and llm_call_gate.allow("behavior", scammer_message_index=incoming_scammer_index)
     )
     behavior = behavior_analyzer.analyze(
@@ -417,6 +428,7 @@ async def handle_message(event: MessageEvent, x_api_key: Optional[str] = Header(
         and state.scam_detected
         and event.message.sender == "scammer"
         and should_run_llm_extraction(state.last_llm_extraction_at, LLM_EXTRACTION_MIN_INTERVAL_SECONDS)
+        and _has_time_budget(request_deadline, (2 * LLM_TIMEOUT_SECONDS) + 1)
         and llm_call_gate.allow("extraction", scammer_message_index=incoming_scammer_index)
     ):
         callback_payload, extended_payload = extract_structured_intelligence(
@@ -436,7 +448,7 @@ async def handle_message(event: MessageEvent, x_api_key: Optional[str] = Header(
     allow_reply_llm = state.scam_detected and llm_call_gate.allow(
         "reply",
         scammer_message_index=incoming_scammer_index,
-    )
+    ) and _has_time_budget(request_deadline, (2 * LLM_TIMEOUT_SECONDS) + 1)
 
     if state.scam_detected and allow_reply_llm:
         reply, provider = generate_agent_reply(
@@ -458,7 +470,7 @@ async def handle_message(event: MessageEvent, x_api_key: Optional[str] = Header(
 
     session_manager.append_transcript(state, "user", reply, int(time.time() * 1000), provider=provider)
 
-    total_messages = _compute_total_messages(event)
+    total_messages = len(state.transcript)
 
     if should_finalize(state):
         session_manager.finalize_and_close(state, build_agent_notes(state), total_messages=total_messages)

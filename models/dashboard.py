@@ -8,6 +8,10 @@ class DashboardIntelCounts(BaseModel):
     upiIds: int
     phishingLinks: int
     phoneNumbers: int
+    emailAddresses: int = 0
+    caseIds: int = 0
+    policyNumbers: int = 0
+    orderNumbers: int = 0
     referenceIds: int = 0
     amounts: int = 0
     emails: int = 0

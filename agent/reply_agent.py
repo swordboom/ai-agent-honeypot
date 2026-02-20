@@ -44,6 +44,7 @@ def _system_prompt(persona: Persona, metadata: Optional[Metadata], state: Sessio
         "You are role-playing as a potential scam victim. Stay believable, concise, and human. "
         "Do not disclose that you are an AI, bot, or honeypot. Do not provide illegal or harmful instructions. "
         "Do not insult or harass. Keep reply under 35 words unless clarification is needed. "
+        "Prefer a soft, investigative tone and include at least one clarifying question when practical. "
         f"Scam category: {state.scam_category}. "
         f"Strategy state: {state.strategy_state}. "
         f"Rolling risk score: {state.rolling_scam_score}. "

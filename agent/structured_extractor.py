@@ -11,10 +11,17 @@ def _empty_payload() -> Tuple[Dict[str, List[str]], Dict[str, List[str]]]:
             "upiIds": [],
             "phishingLinks": [],
             "phoneNumbers": [],
+            "emailAddresses": [],
+            "caseIds": [],
+            "policyNumbers": [],
+            "orderNumbers": [],
             "suspiciousKeywords": [],
         },
         {
             "referenceIds": [],
+            "caseIds": [],
+            "policyNumbers": [],
+            "orderNumbers": [],
             "amounts": [],
             "emails": [],
             "cryptoWallets": [],
@@ -48,6 +55,10 @@ def extract_structured_intelligence(
         "- upiIds: string[]\n"
         "- phishingLinks: string[]\n"
         "- phoneNumbers: string[]\n"
+        "- emailAddresses: string[]\n"
+        "- caseIds: string[]\n"
+        "- policyNumbers: string[]\n"
+        "- orderNumbers: string[]\n"
         "- suspiciousKeywords: string[]\n"
         "- referenceIds: string[]\n"
         "- amounts: string[]\n"
@@ -87,10 +98,17 @@ def extract_structured_intelligence(
         "upiIds": _coerce_list(obj.get("upiIds")),
         "phishingLinks": _coerce_list(obj.get("phishingLinks")),
         "phoneNumbers": _coerce_list(obj.get("phoneNumbers")),
+        "emailAddresses": _coerce_list(obj.get("emailAddresses")),
+        "caseIds": _coerce_list(obj.get("caseIds")),
+        "policyNumbers": _coerce_list(obj.get("policyNumbers")),
+        "orderNumbers": _coerce_list(obj.get("orderNumbers")),
         "suspiciousKeywords": _coerce_list(obj.get("suspiciousKeywords")),
     }
     extended = {
         "referenceIds": _coerce_list(obj.get("referenceIds")),
+        "caseIds": _coerce_list(obj.get("caseIds")),
+        "policyNumbers": _coerce_list(obj.get("policyNumbers")),
+        "orderNumbers": _coerce_list(obj.get("orderNumbers")),
         "amounts": _coerce_list(obj.get("amounts")),
         "emails": _coerce_list(obj.get("emails")),
         "cryptoWallets": _coerce_list(obj.get("cryptoWallets")),
@@ -101,6 +119,7 @@ def extract_structured_intelligence(
     # Normalize a few common fields cheaply.
     callback["upiIds"] = [v.lower() for v in callback["upiIds"]]
     callback["phishingLinks"] = [v.rstrip("),.;") for v in callback["phishingLinks"]]
+    callback["emailAddresses"] = [v.lower() for v in callback["emailAddresses"]]
     extended["emails"] = [v.lower() for v in extended["emails"]]
 
     return callback, extended
@@ -111,4 +130,3 @@ def should_run_llm_extraction(last_run_at: Optional[float], min_interval_seconds
     if last_run_at is None:
         return True
     return (now - last_run_at) >= max(0, min_interval_seconds)
-
