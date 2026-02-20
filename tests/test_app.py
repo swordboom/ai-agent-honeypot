@@ -19,6 +19,7 @@ from agent.personas import assign_persona  # noqa: E402
 from agent.reply_agent import generate_agent_reply  # noqa: E402
 from models.api import Message, MessageEvent, Metadata  # noqa: E402
 from models.session import Intelligence, SessionState, TranscriptMessage  # noqa: E402
+from services.engagement_policy import should_finalize  # noqa: E402
 
 
 class _DummyLLM:
@@ -176,6 +177,21 @@ class HoneypotTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(updated.finalized)
         self.assertTrue(updated.closed)
         self.assertGreaterEqual(len(callback_calls), 1)
+
+    def test_strict_eval_finalization_for_fast_sessions(self):
+        state = SessionState(
+            session_id="fast-finalize",
+            persona_id="retired_teacher",
+            persona_label="Arthur",
+        )
+        state.scam_detected = True
+        state.agent_turns = 8
+        state.scammer_messages = 8
+        state.first_scam_timestamp = time.time() - 8
+        state.intel.phone_numbers.add("+919876543210")
+        state.intel.phishing_links.add("https://fake.example/verify")
+
+        self.assertTrue(should_finalize(state))
 
     async def test_api_allows_requests_when_api_key_not_configured(self):
         original = main.API_KEY

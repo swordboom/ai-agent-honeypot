@@ -48,6 +48,7 @@ Dashboard API endpoints require header `x-dashboard-key`.
 - `LLM_BEHAVIOR_RPM_LIMIT` (default: `8`)
 - `LLM_EXTRACTION_RPM_LIMIT` (default: `6`)
 - `LLM_BEHAVIOR_SAMPLE_EVERY_N_SCAM_MESSAGES` (default: `2`)
+- `STRICT_EVAL_FINALIZATION` (default: `true`, closes scam sessions by turn/message thresholds even when duration is short)
 - `ENABLE_LLM_EXTRACTION` (default: `true`)
 - `LLM_EXTRACTION_MIN_INTERVAL_SECONDS` (default: `15`)
 - `INACTIVITY_FINALIZE_SECONDS` (default: `120`, set `0` to disable inactivity auto-finalize)
