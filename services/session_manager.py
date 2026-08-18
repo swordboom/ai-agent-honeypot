@@ -125,6 +125,29 @@ class SessionManager:
             state.strategy_state = strategy_state
             state.updated_at = time.time()
 
+    def update_language(
+        self,
+        state: SessionState,
+        code: str,
+        name: str,
+        confidence: float,
+        vernacular_score: float,
+    ) -> None:
+        with self._lock:
+            if code and code != "unknown":
+                # Keep the strongest non-English read: scammers open in English and
+                # switch to vernacular once the target engages.
+                stronger = confidence > state.language_confidence
+                upgrade_from_english = state.language in {"en", "unknown"} and code != "en"
+                if stronger or upgrade_from_english:
+                    state.language = code
+                    state.language_name = name
+                    state.language_confidence = round(confidence, 2)
+                if code not in state.languages_seen:
+                    state.languages_seen.append(code)
+            state.vernacular_score = round(max(state.vernacular_score, vernacular_score), 2)
+            state.updated_at = time.time()
+
     def increment_scammer_message(self, state: SessionState) -> None:
         with self._lock:
             state.scammer_messages += 1
@@ -186,31 +209,3 @@ class SessionManager:
             state.last_llm_extraction_at = time.time()
             state.updated_at = time.time()
 
-    def update_callback_state(
-        self,
-        state: SessionState,
-        *,
-        sent: Optional[bool] = None,
-        payload_signature: Optional[str] = None,
-        attempts_inc: bool = False,
-        last_status: Optional[int] = None,
-        last_error: Optional[str] = None,
-        last_sent_at: Optional[float] = None,
-        updates_inc: bool = False,
-    ) -> None:
-        with self._lock:
-            if sent is not None:
-                state.callback_sent = sent
-            if payload_signature is not None:
-                state.callback_payload_signature = payload_signature
-            if attempts_inc:
-                state.callback_attempts += 1
-            if updates_inc:
-                state.callback_updates += 1
-            if last_status is not None:
-                state.callback_last_status = last_status
-            if last_error is not None:
-                state.callback_last_error = last_error
-            if last_sent_at is not None:
-                state.callback_last_sent_at = last_sent_at
-            state.updated_at = time.time()

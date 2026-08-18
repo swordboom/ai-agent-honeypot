@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Honey-Pot Operator Console</title>
+  <link rel="stylesheet" href="/static/dashboard.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <h1>Operator Console</h1>
+      <p>Feed events in, watch correlation, prioritisation and response recommendation happen live</p>
+    </div>
+    <div class="topbar-actions">
+      <span id="liveStatus" class="live-dot">ready</span>
+      <a class="navlink" href="/dashboard">Dashboard</a>
+      <button id="themeBtn" type="button">Dark mode</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="panel">
+      <h2>API key</h2>
+      <p class="hint">
+        Only needed if the server was started with <code>API_KEY</code> set. Stored in this
+        browser only, never sent anywhere but this server.
+      </p>
+      <form id="keyForm" class="probe-form">
+        <input id="apiKey" type="password" placeholder="x-api-key (leave blank if unset)" />
+        <button type="submit">Save</button>
+      </form>
+    </section>
+
+    <section class="row-2">
+      <div class="panel">
+        <h2>Live conversation</h2>
+        <p class="hint">
+          Send a message as the scammer. The honey-pot persona replies and the detection
+          pipeline runs on every turn.
+        </p>
+
+        <div class="field-row">
+          <label for="sessionId">Session</label>
+          <input id="sessionId" type="text" value="console-1" />
+          <button id="newSessionBtn" type="button">New session</button>
+        </div>
+
+        <div id="chat" class="transcript chat"></div>
+
+        <form id="chatForm" class="probe-form">
+          <textarea id="chatText" placeholder="aapka account band ho jayega, turant KYC karo"></textarea>
+          <button type="submit">Send as scammer</button>
+        </form>
+
+        <h3>Quick sends</h3>
+        <div class="probe-samples" id="chatSamples"></div>
+
+        <h3>Live detection</h3>
+        <div id="liveDetection" class="meta">Send a message to start.</div>
+      </div>
+
+      <div class="panel">
+        <h2>Campaign replay</h2>
+        <p class="hint">
+          Fires a whole multi-session campaign through <code>POST /api/ingest</code> in one call.
+          Sessions that share a payment identifier should collapse into a single incident.
+        </p>
+        <div id="scenarioList" class="scenario-list"></div>
+
+        <h3>Ingest result</h3>
+        <div id="ingestResult" class="meta">No batch sent yet.</div>
+
+        <h3>Triage funnel</h3>
+        <div id="funnel" class="funnel"></div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Declared incidents &amp; response plans</h2>
+      <p class="hint">
+        Correlate &rarr; prioritise &rarr; recommend. Refreshes after every message and batch.
+      </p>
+      <ul id="incidentList" class="incident-list"></ul>
+    </section>
+
+    <section class="panel">
+      <h2>Session report</h2>
+      <p class="hint">Our own schema, served by <code>GET /api/report/session/{id}</code>.</p>
+      <pre id="sessionReport" class="intel"></pre>
+    </section>
+  </main>
+
+  <div id="tooltip" role="tooltip" aria-hidden="true"></div>
+  <script src="/static/console.js"></script>
+</body>
+</html>

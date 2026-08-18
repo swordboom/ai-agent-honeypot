@@ -19,12 +19,36 @@ class DashboardIntelCounts(BaseModel):
     domains: int = 0
 
 
+class DashboardCountEntry(BaseModel):
+    """Generic label/value pair backing the category, language and severity charts."""
+
+    label: str
+    value: int
+
+
+class DashboardTimelinePoint(BaseModel):
+    bucketStart: int
+    sessions: int
+    messages: int
+
+
 class DashboardSummary(BaseModel):
     activeEngagements: int
     totalSessions: int
     finalizedSessions: int
+    scamSessions: int
     totalScammerTimeWastedSeconds: int
+    totalMessages: int
     totalExtracted: DashboardIntelCounts
+    severityCounts: Dict[str, int] = {}
+    openIncidents: int = 0
+    topSeverity: str = "LOW"
+    triageFunnel: Dict[str, object] = {}
+    categoryBreakdown: List[DashboardCountEntry] = []
+    languageBreakdown: List[DashboardCountEntry] = []
+    providerBreakdown: List[DashboardCountEntry] = []
+    timeline: List[DashboardTimelinePoint] = []
+    llmModelHealth: Dict[str, object] = {}
 
 
 class DashboardSessionCard(BaseModel):
@@ -39,6 +63,10 @@ class DashboardSessionCard(BaseModel):
     replyProvider: str = "rules"
     messageCount: int
     lastUpdated: int
+    language: str = "en"
+    languageName: str = "English"
+    incidentId: Optional[str] = None
+    incidentSeverity: Optional[str] = None
     intelCounts: DashboardIntelCounts
 
 
@@ -61,16 +89,44 @@ class DashboardSessionDetail(BaseModel):
     scamTriggers: List[str]
     engagementComplete: bool
     replyProvider: str
-    callbackSent: bool
-    callbackAttempts: int
-    callbackLastStatus: Optional[int]
-    callbackLastError: Optional[str]
     totalMessages: int
     timeWastedSeconds: int
-    finalOutput: Dict[str, object]
+    language: str = "en"
+    languageName: str = "English"
+    languageConfidence: float = 0.0
+    languagesSeen: List[str] = []
+    vernacularScore: float = 0.0
+    incidentId: Optional[str] = None
+    incidentName: Optional[str] = None
+    incidentSeverity: Optional[str] = None
+    incidentTriage: Optional[str] = None
+    responsePlan: List[Dict[str, object]] = []
+    report: Dict[str, object]
     extractedIntelligence: Dict[str, List[str]]
     extendedIntelligence: Dict[str, List[str]]
     transcript: List[DashboardTranscriptEntry]
+
+
+class DashboardIncident(BaseModel):
+    incidentId: str
+    name: str
+    severity: str
+    severityScore: float
+    scamCategory: str
+    sessionIds: List[str]
+    sessionCount: int
+    firstSeen: int
+    lastSeen: int
+    durationSeconds: int
+    sessionsPerMinute: float
+    sharedIndicators: List[str]
+    languages: List[str]
+    totalMessages: int
+    maxConfidence: float
+    scoreBreakdown: Dict[str, float]
+    recommendedAction: str
+    triage: str = "ACTION_REQUIRED"
+    responsePlan: List[Dict[str, object]] = []
 
 
 class DashboardMapPoint(BaseModel):

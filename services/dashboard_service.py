@@ -2,14 +2,21 @@ import re
 import time
 from typing import Dict, List, Tuple
 
+from agent.llm_clients import model_health_snapshot
+from agent.multilingual import LANGUAGE_NAMES
 from models.dashboard import (
+    DashboardCountEntry,
+    DashboardIncident,
     DashboardIntelCounts,
     DashboardMapPoint,
     DashboardSessionCard,
     DashboardSessionDetail,
     DashboardSummary,
+    DashboardTimelinePoint,
     DashboardTranscriptEntry,
 )
+from services.incident_engine import Incident, declare_incidents, severity_counts, triage_funnel
+from services.reporting import action_payload, session_report
 from services.session_manager import SessionManager
 
 
@@ -24,6 +31,9 @@ COUNTRY_PREFIXES: Dict[str, Tuple[str, str]] = {
     "94": ("LK", "Sri Lanka"),
     "971": ("AE", "United Arab Emirates"),
 }
+
+TIMELINE_BUCKET_SECONDS = 300
+TIMELINE_BUCKETS = 12
 
 
 def _get_country_from_phone(phone: str) -> Tuple[str, str]:
@@ -46,31 +56,6 @@ def _session_time_wasted_seconds(first_scam_timestamp, finalized_timestamp, upda
     return max(0, int(end - start))
 
 
-def _final_output_payload(state, now_ts: float) -> Dict[str, object]:
-    duration = _session_time_wasted_seconds(
-        state.first_scam_timestamp,
-        state.finalized_timestamp,
-        state.updated_at,
-        now_ts,
-    )
-    total_messages = state.final_total_messages_exchanged or len(state.transcript)
-    return {
-        "sessionId": state.session_id,
-        "status": "completed" if state.finalized else "in_progress",
-        "scamDetected": state.scam_detected,
-        "scamType": state.scam_category,
-        "confidenceLevel": round(min(1.0, max(0.0, state.scam_confidence)), 2),
-        "extractedIntelligence": state.intel.to_callback_payload(),
-        "totalMessagesExchanged": total_messages,
-        "engagementDurationSeconds": duration,
-        "engagementMetrics": {
-            "totalMessagesExchanged": total_messages,
-            "engagementDurationSeconds": duration,
-        },
-        "agentNotes": state.agent_notes,
-    }
-
-
 def _intel_counts(intel) -> DashboardIntelCounts:
     return DashboardIntelCounts(
         bankAccounts=len(intel.bank_accounts),
@@ -89,37 +74,88 @@ def _intel_counts(intel) -> DashboardIntelCounts:
     )
 
 
+def _to_entries(counts: Dict[str, int]) -> List[DashboardCountEntry]:
+    return [
+        DashboardCountEntry(label=label, value=value)
+        for label, value in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    ]
+
+
+def _incident_model(incident: Incident) -> DashboardIncident:
+    return DashboardIncident(
+        incidentId=incident.incident_id,
+        name=incident.name,
+        severity=incident.severity,
+        severityScore=incident.severity_score,
+        scamCategory=incident.scam_category,
+        sessionIds=incident.session_ids,
+        sessionCount=incident.session_count,
+        firstSeen=int(incident.first_seen),
+        lastSeen=int(incident.last_seen),
+        durationSeconds=incident.duration_seconds,
+        sessionsPerMinute=incident.sessions_per_minute,
+        sharedIndicators=incident.shared_indicators,
+        languages=incident.languages,
+        totalMessages=incident.total_messages,
+        maxConfidence=incident.max_confidence,
+        scoreBreakdown=incident.score_breakdown,
+        recommendedAction=incident.recommended_action,
+        triage=incident.triage,
+        responsePlan=[action_payload(a) for a in incident.response_plan],
+    )
+
+
 class DashboardService:
     def __init__(self, session_manager: SessionManager):
         self._sessions = session_manager
 
-    def summary(self) -> DashboardSummary:
+    # --- incidents (Feature 3) -------------------------------------------------
+
+    def incidents(self) -> List[DashboardIncident]:
+        return [_incident_model(i) for i in declare_incidents(self._sessions.list_sessions())]
+
+    def _incident_index(self) -> Dict[str, Incident]:
+        """session_id -> the incident it belongs to."""
+        index: Dict[str, Incident] = {}
+        for incident in declare_incidents(self._sessions.list_sessions()):
+            for session_id in incident.session_ids:
+                index[session_id] = incident
+        return index
+
+    # --- summary ---------------------------------------------------------------
+
+    def summary(self, raw_events: int = 0) -> DashboardSummary:
         now_ts = time.time()
         sessions = self._sessions.list_sessions()
 
         active = 0
         finalized = 0
+        scam_sessions = 0
         total_wasted = 0
+        total_messages = 0
 
-        all_bank = set()
-        all_upi = set()
-        all_links = set()
-        all_phones = set()
-        all_case_ids = set()
-        all_policy_numbers = set()
-        all_order_numbers = set()
-        all_ref = set()
-        all_amounts = set()
-        all_emails = set()
-        all_crypto = set()
-        all_domains = set()
+        categories: Dict[str, int] = {}
+        languages: Dict[str, int] = {}
+        providers: Dict[str, int] = {}
+
+        all_bank, all_upi, all_links, all_phones = set(), set(), set(), set()
+        all_case_ids, all_policy_numbers, all_order_numbers, all_ref = set(), set(), set(), set()
+        all_amounts, all_emails, all_crypto, all_domains = set(), set(), set(), set()
 
         for state in sessions:
             if state.scam_detected and not state.finalized:
                 active += 1
             if state.finalized:
                 finalized += 1
+            if state.scam_detected:
+                scam_sessions += 1
+                categories[state.scam_category] = categories.get(state.scam_category, 0) + 1
 
+            language_label = LANGUAGE_NAMES.get(state.language, state.language or "Unknown")
+            languages[language_label] = languages.get(language_label, 0) + 1
+            providers[state.reply_provider or "rules"] = providers.get(state.reply_provider or "rules", 0) + 1
+
+            total_messages += len(state.transcript)
             total_wasted += _session_time_wasted_seconds(
                 state.first_scam_timestamp,
                 state.finalized_timestamp,
@@ -140,11 +176,25 @@ class DashboardService:
             all_crypto.update(state.intel.crypto_wallets)
             all_domains.update(state.intel.domains)
 
+        incidents = declare_incidents(sessions, now=now_ts)
+        counts = severity_counts(incidents)
+
         return DashboardSummary(
             activeEngagements=active,
             totalSessions=len(sessions),
             finalizedSessions=finalized,
+            scamSessions=scam_sessions,
             totalScammerTimeWastedSeconds=total_wasted,
+            totalMessages=total_messages,
+            severityCounts=counts,
+            openIncidents=sum(1 for i in incidents if i.session_count and not self._all_finalized(i)),
+            topSeverity=incidents[0].severity if incidents else "LOW",
+            triageFunnel=triage_funnel(raw_events or total_messages, len(sessions), incidents),
+            categoryBreakdown=_to_entries(categories),
+            languageBreakdown=_to_entries(languages),
+            providerBreakdown=_to_entries(providers),
+            timeline=self._timeline(sessions, now_ts),
+            llmModelHealth=model_health_snapshot(),
             totalExtracted=DashboardIntelCounts(
                 bankAccounts=len(all_bank),
                 upiIds=len(all_upi),
@@ -162,10 +212,49 @@ class DashboardService:
             ),
         )
 
+    def _all_finalized(self, incident: Incident) -> bool:
+        return all(
+            (self._sessions.get(sid).finalized if self._sessions.get(sid) else True)
+            for sid in incident.session_ids
+        )
+
+    def _timeline(self, sessions, now_ts: float) -> List[DashboardTimelinePoint]:
+        """Sessions and messages per 5-minute bucket over the last hour."""
+        newest_bucket = int(now_ts // TIMELINE_BUCKET_SECONDS) * TIMELINE_BUCKET_SECONDS
+        buckets = [newest_bucket - (i * TIMELINE_BUCKET_SECONDS) for i in range(TIMELINE_BUCKETS - 1, -1, -1)]
+        session_counts = {b: 0 for b in buckets}
+        message_counts = {b: 0 for b in buckets}
+        oldest = buckets[0]
+
+        for state in sessions:
+            started = state.first_scam_timestamp or state.created_at
+            bucket = int(started // TIMELINE_BUCKET_SECONDS) * TIMELINE_BUCKET_SECONDS
+            if bucket in session_counts:
+                session_counts[bucket] += 1
+            elif started < oldest:
+                session_counts[oldest] += 1
+
+            for msg in state.transcript:
+                ts = _message_seconds(msg.timestamp, state.updated_at)
+                mbucket = int(ts // TIMELINE_BUCKET_SECONDS) * TIMELINE_BUCKET_SECONDS
+                if mbucket in message_counts:
+                    message_counts[mbucket] += 1
+                elif ts < oldest:
+                    message_counts[oldest] += 1
+
+        return [
+            DashboardTimelinePoint(bucketStart=b, sessions=session_counts[b], messages=message_counts[b])
+            for b in buckets
+        ]
+
+    # --- sessions --------------------------------------------------------------
+
     def list_sessions(self, limit: int) -> List[DashboardSessionCard]:
         sessions = sorted(self._sessions.list_sessions(), key=lambda item: item.updated_at, reverse=True)
+        index = self._incident_index()
         cards = []
         for state in sessions[:limit]:
+            incident = index.get(state.session_id)
             cards.append(
                 DashboardSessionCard(
                     sessionId=state.session_id,
@@ -179,6 +268,10 @@ class DashboardService:
                     replyProvider=state.reply_provider,
                     messageCount=len(state.transcript),
                     lastUpdated=int(state.updated_at),
+                    language=state.language,
+                    languageName=state.language_name,
+                    incidentId=incident.incident_id if incident else None,
+                    incidentSeverity=incident.severity if incident else None,
                     intelCounts=_intel_counts(state.intel),
                 )
             )
@@ -190,6 +283,7 @@ class DashboardService:
             raise KeyError("Session not found")
 
         now_ts = time.time()
+        incident = self._incident_index().get(session_id)
         return DashboardSessionDetail(
             sessionId=state.session_id,
             personaId=state.persona_id,
@@ -202,10 +296,6 @@ class DashboardService:
             scamTriggers=state.scam_triggers,
             engagementComplete=state.finalized,
             replyProvider=state.reply_provider,
-            callbackSent=state.callback_sent,
-            callbackAttempts=state.callback_attempts,
-            callbackLastStatus=state.callback_last_status,
-            callbackLastError=state.callback_last_error,
             totalMessages=len(state.transcript),
             timeWastedSeconds=_session_time_wasted_seconds(
                 state.first_scam_timestamp,
@@ -213,8 +303,18 @@ class DashboardService:
                 state.updated_at,
                 now_ts,
             ),
-            finalOutput=_final_output_payload(state, now_ts),
-            extractedIntelligence=state.intel.to_callback_payload(),
+            language=state.language,
+            languageName=state.language_name,
+            languageConfidence=state.language_confidence,
+            languagesSeen=[LANGUAGE_NAMES.get(c, c) for c in state.languages_seen],
+            vernacularScore=state.vernacular_score,
+            incidentId=incident.incident_id if incident else None,
+            incidentName=incident.name if incident else None,
+            incidentSeverity=incident.severity if incident else None,
+            incidentTriage=incident.triage if incident else None,
+            responsePlan=[action_payload(a) for a in incident.response_plan] if incident else [],
+            report=session_report(state, incident),
+            extractedIntelligence=state.intel.to_indicator_payload(),
             extendedIntelligence=state.intel.to_extended_payload(),
             transcript=[
                 DashboardTranscriptEntry(
@@ -239,3 +339,13 @@ class DashboardService:
         result = [DashboardMapPoint(**row) for row in counts.values()]
         result.sort(key=lambda item: item.count, reverse=True)
         return result
+
+
+def _message_seconds(timestamp, fallback: float) -> float:
+    """Transcript timestamps arrive as ms ints, second ints, or strings."""
+    try:
+        value = float(timestamp)
+    except (TypeError, ValueError):
+        return fallback
+    # Anything past year 2286 in seconds is really milliseconds.
+    return value / 1000.0 if value > 1e11 else value

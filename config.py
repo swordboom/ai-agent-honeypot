@@ -1,6 +1,8 @@
 import os
 from dataclasses import dataclass
 
+from agent.llm_clients import DEFAULT_FREE_MODELS
+
 
 def load_dotenv(path: str = ".env") -> None:
     """
@@ -51,17 +53,21 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _env_list(name: str, default: tuple) -> tuple:
+    value = os.getenv(name)
+    if value is None or not value.strip():
+        return default
+    models = tuple(m.strip() for m in value.split(",") if m.strip())
+    return models or default
+
+
 @dataclass(frozen=True)
 class Settings:
     api_key: str
-    dashboard_key: str
-    callback_url: str
     extended_response: bool
 
-    openai_api_key: str
-    openai_model: str
-    gemini_api_key: str
-    gemini_model: str
+    openrouter_api_key: str
+    openrouter_models: tuple
 
     agent_max_history_messages: int
     llm_timeout_seconds: int
@@ -81,12 +87,6 @@ class Settings:
     session_ttl_seconds: int
     session_cleanup_interval_seconds: int
 
-    callback_timeout_seconds: int
-    callback_max_attempts: int
-    callback_backoff_base_seconds: int
-    callback_max_workers: int
-    enable_callback_updates: bool
-    callback_max_updates: int
 
     @staticmethod
     def from_env() -> "Settings":
@@ -94,18 +94,11 @@ class Settings:
         load_dotenv()
         return Settings(
             api_key=os.getenv("HONEY_POT_API_KEY") or os.getenv("API_KEY") or "",
-            dashboard_key=os.getenv("HONEY_POT_DASHBOARD_KEY") or "",
-            callback_url=os.getenv(
-                "HONEY_POT_CALLBACK_URL",
-                "https://hackathon.guvi.in/api/updateHoneyPotFinalResult",
-            ),
             extended_response=_env_bool("HONEY_POT_EXTENDED_RESPONSE", False),
-            openai_api_key=os.getenv("OPENAI_API_KEY") or "",
-            openai_model=os.getenv("OPENAI_MODEL") or "gpt-4o-mini",
-            gemini_api_key=os.getenv("GEMINI_API_KEY") or "",
-            gemini_model=os.getenv("GEMINI_MODEL") or "gemini-1.5-flash",
+            openrouter_api_key=os.getenv("OPENROUTER_API_KEY") or "",
+            openrouter_models=_env_list("OPENROUTER_MODELS", DEFAULT_FREE_MODELS),
             agent_max_history_messages=_env_int("AGENT_MAX_HISTORY_MESSAGES", 12),
-            llm_timeout_seconds=_env_int("LLM_TIMEOUT_SECONDS", 10),
+            llm_timeout_seconds=_env_int("LLM_TIMEOUT_SECONDS", 12),
             request_timeout_budget_seconds=_env_int("REQUEST_TIMEOUT_BUDGET_SECONDS", 26),
             enable_llm_behavior_analysis=_env_bool("ENABLE_LLM_BEHAVIOR_ANALYSIS", True),
             high_load_mode=_env_bool("HIGH_LOAD_MODE", False),
@@ -122,10 +115,4 @@ class Settings:
             inactivity_finalize_seconds=_env_int("INACTIVITY_FINALIZE_SECONDS", 120),
             session_ttl_seconds=_env_int("SESSION_TTL_SECONDS", 6 * 60 * 60),
             session_cleanup_interval_seconds=_env_int("SESSION_CLEANUP_INTERVAL_SECONDS", 60),
-            callback_timeout_seconds=_env_int("CALLBACK_TIMEOUT_SECONDS", 5),
-            callback_max_attempts=_env_int("CALLBACK_MAX_ATTEMPTS", 3),
-            callback_backoff_base_seconds=_env_int("CALLBACK_BACKOFF_BASE_SECONDS", 1),
-            callback_max_workers=_env_int("CALLBACK_MAX_WORKERS", 4),
-            enable_callback_updates=_env_bool("ENABLE_CALLBACK_UPDATES", True),
-            callback_max_updates=_env_int("CALLBACK_MAX_UPDATES", 10),
         )

@@ -1,7 +1,7 @@
 import time
 from typing import Dict, List, Optional, Tuple
 
-from agent.llm_clients import GeminiClient, OpenAIClient, extract_json_object
+from agent.llm_clients import OpenRouterClient, extract_json_object
 
 
 def _empty_payload() -> Tuple[Dict[str, List[str]], Dict[str, List[str]]]:
@@ -41,15 +41,17 @@ def _coerce_list(value) -> List[str]:
 
 def extract_structured_intelligence(
     text: str,
-    openai: Optional[OpenAIClient],
-    gemini: Optional[GeminiClient],
+    llm: Optional[OpenRouterClient],
     timeout_hint_seconds: int = 10,
 ) -> Tuple[Dict[str, List[str]], Dict[str, List[str]]]:
-    if not text or (not (openai and openai.api_key) and not (gemini and gemini.api_key)):
+    if not text or not (llm and llm.api_key):
         return _empty_payload()
 
     system = (
-        "Extract scam intelligence entities from the message. "
+        "Extract scam intelligence entities from the message. The message may be in English, "
+        "Hindi, Bengali, Tamil, Telugu or Marathi (native script, romanized or code-mixed). "
+        "Extract the entities verbatim regardless of language; keep suspiciousKeywords in the "
+        "language they were written in. "
         "Return ONLY valid JSON with these keys:\n"
         "- bankAccounts: string[]\n"
         "- upiIds: string[]\n"
@@ -74,17 +76,12 @@ def extract_structured_intelligence(
         {"role": "user", "content": text},
     ]
 
-    raw = None
-    if openai and openai.api_key:
-        raw = openai.chat(
-            messages,
-            temperature=0.0,
-            max_tokens=260,
-            response_format={"type": "json_object"},
-        )
-
-    if not raw and gemini and gemini.api_key:
-        raw = gemini.chat(messages, temperature=0.0, max_tokens=260)
+    raw = llm.chat(
+        messages,
+        temperature=0.0,
+        max_tokens=260,
+        response_format={"type": "json_object"},
+    )
 
     if not raw:
         return _empty_payload()

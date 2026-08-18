@@ -10,7 +10,8 @@ from pydantic import BaseModel
 
 from agent.behavior_analyzer import BehaviorAnalyzer
 from agent.intelligence_extractor import extract_intelligence
-from agent.llm_clients import GeminiClient, OpenAIClient
+from agent.llm_clients import OpenRouterClient, list_free_models, model_health_snapshot
+from agent.multilingual import detect_language
 from agent.notes import build_agent_notes
 from agent.personas import assign_persona
 from agent.reply_agent import (
@@ -23,14 +24,15 @@ from agent.structured_extractor import extract_structured_intelligence, should_r
 from config import Settings
 from models.api import MessageEvent
 from models.dashboard import (
+    DashboardIncident,
     DashboardMapPoint,
     DashboardSessionCard,
     DashboardSessionDetail,
     DashboardSummary,
 )
 from models.session import Intelligence, SessionState, TranscriptMessage
-from services.callback_service import CallbackService
 from services.dashboard_service import DashboardService
+from services.reporting import incident_index, session_report, threat_report
 from services.engagement_policy import should_finalize
 from services.llm_load_control import LLMCallGate
 from services.session_manager import SessionManager
@@ -47,14 +49,10 @@ settings = Settings.from_env()
 
 # Expose settings-derived values as module globals for easy local overrides/tests.
 API_KEY = settings.api_key
-DASHBOARD_KEY = settings.dashboard_key
-CALLBACK_ENDPOINT = settings.callback_url
 EXTENDED_RESPONSE = settings.extended_response
 
-OPENAI_API_KEY = settings.openai_api_key
-OPENAI_MODEL = settings.openai_model
-GEMINI_API_KEY = settings.gemini_api_key
-GEMINI_MODEL = settings.gemini_model
+OPENROUTER_API_KEY = settings.openrouter_api_key
+OPENROUTER_MODELS = settings.openrouter_models
 AGENT_MAX_HISTORY_MESSAGES = settings.agent_max_history_messages
 LLM_TIMEOUT_SECONDS = settings.llm_timeout_seconds
 REQUEST_TIMEOUT_BUDGET_SECONDS = max(5, settings.request_timeout_budget_seconds)
@@ -72,16 +70,6 @@ session_manager = SessionManager(
 scam_detector = ScamDetector()
 behavior_analyzer = BehaviorAnalyzer()
 dashboard_service = DashboardService(session_manager)
-callback_service = CallbackService(
-    callback_url=CALLBACK_ENDPOINT,
-    timeout_seconds=settings.callback_timeout_seconds,
-    max_attempts=settings.callback_max_attempts,
-    backoff_base_seconds=settings.callback_backoff_base_seconds,
-    max_workers=settings.callback_max_workers,
-    enable_updates=settings.enable_callback_updates,
-    max_updates=settings.callback_max_updates,
-    session_manager=session_manager,
-)
 llm_call_gate = LLMCallGate(
     enabled=HIGH_LOAD_MODE,
     global_rpm_limit=settings.llm_global_rpm_limit,
@@ -101,6 +89,27 @@ class DebugTextRequest(BaseModel):
     text: str
 
 
+class IngestBatch(BaseModel):
+    """A batch of raw events from an upstream feed."""
+
+    events: List[MessageEvent]
+
+
+# Raw events seen since start. The triage funnel is only meaningful against the
+# volume that came in - "3 incidents" means nothing without "out of 900 events".
+# ponytail: a plain counter, not a metrics backend; swap in Prometheus if it ever
+# needs to survive a restart.
+_event_counter = {"count": 0}
+
+
+def _count_event(n: int = 1) -> None:
+    _event_counter["count"] += n
+
+
+def raw_event_count() -> int:
+    return _event_counter["count"]
+
+
 def _require_api_key(x_api_key: Optional[str]) -> None:
     # If API key is not configured, run in open mode.
     if not API_KEY:
@@ -109,23 +118,14 @@ def _require_api_key(x_api_key: Optional[str]) -> None:
         raise HTTPException(status_code=401, detail="Invalid API key")
 
 
-def _require_dashboard_key(x_dashboard_key: Optional[str]) -> None:
-    if not DASHBOARD_KEY:
-        raise HTTPException(status_code=503, detail="Dashboard key is not configured")
-    if not x_dashboard_key or x_dashboard_key != DASHBOARD_KEY:
-        raise HTTPException(status_code=401, detail="Invalid dashboard key")
-
-
-def _openai_client() -> Optional[OpenAIClient]:
-    if not OPENAI_API_KEY:
+def _llm_client() -> Optional[OpenRouterClient]:
+    if not OPENROUTER_API_KEY:
         return None
-    return OpenAIClient(api_key=OPENAI_API_KEY, model=OPENAI_MODEL, timeout_seconds=LLM_TIMEOUT_SECONDS)
-
-
-def _gemini_client() -> Optional[GeminiClient]:
-    if not GEMINI_API_KEY:
-        return None
-    return GeminiClient(api_key=GEMINI_API_KEY, model=GEMINI_MODEL, timeout_seconds=LLM_TIMEOUT_SECONDS)
+    return OpenRouterClient(
+        api_key=OPENROUTER_API_KEY,
+        models=OPENROUTER_MODELS,
+        timeout_seconds=LLM_TIMEOUT_SECONDS,
+    )
 
 
 def _collect_scammer_texts(event: MessageEvent) -> List[str]:
@@ -140,26 +140,6 @@ def _engagement_duration_seconds(state: SessionState) -> int:
         return 0
     end = state.finalized_timestamp or time.time()
     return max(0, int(end - state.first_scam_timestamp))
-
-
-def _build_final_output(state: SessionState, total_messages: int) -> Dict[str, object]:
-    engagement_duration = _engagement_duration_seconds(state)
-    confidence = round(min(1.0, max(0.0, state.scam_confidence)), 2)
-    return {
-        "sessionId": state.session_id,
-        "status": "completed" if state.finalized else "in_progress",
-        "scamDetected": state.scam_detected,
-        "scamType": state.scam_category,
-        "confidenceLevel": confidence,
-        "extractedIntelligence": state.intel.to_callback_payload(),
-        "totalMessagesExchanged": total_messages,
-        "engagementDurationSeconds": engagement_duration,
-        "engagementMetrics": {
-            "totalMessagesExchanged": total_messages,
-            "engagementDurationSeconds": engagement_duration,
-        },
-        "agentNotes": state.agent_notes or build_agent_notes(state),
-    }
 
 
 def _rolling_score(previous: float, rule_score: float, behavior_score: float) -> float:
@@ -209,7 +189,6 @@ def _auto_finalize_inactive_sessions(skip_session_id: Optional[str] = None) -> i
             build_agent_notes(stale),
             total_messages=total_messages,
         )
-        callback_service.send_async(stale, total_messages=total_messages)
         finalized_count += 1
 
     return finalized_count
@@ -232,37 +211,47 @@ async def healthcheck() -> Dict[str, str]:
     return {"status": "ok"}
 
 
-@app.get("/dashboard")
-async def dashboard_page() -> FileResponse:
-    file_path = os.path.join(STATIC_DIR, "dashboard.html")
+def _static_page(filename: str, label: str) -> FileResponse:
+    file_path = os.path.join(STATIC_DIR, filename)
     if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="Dashboard UI not found")
+        raise HTTPException(status_code=404, detail=f"{label} not found")
     return FileResponse(file_path)
 
 
+@app.get("/")
+async def index() -> FileResponse:
+    return _static_page("dashboard.html", "Dashboard UI")
+
+
+@app.get("/dashboard")
+async def dashboard_page() -> FileResponse:
+    return _static_page("dashboard.html", "Dashboard UI")
+
+
+@app.get("/console")
+async def console_page() -> FileResponse:
+    """Operator console: feed events in and watch correlation happen live."""
+    return _static_page("console.html", "Console UI")
+
+
+# Dashboard APIs are read-only telemetry over an in-memory store and carry no
+# secrets, so they are open. The scam-ingest endpoint keeps its x-api-key.
 @app.get("/dashboard/api/summary", response_model=DashboardSummary)
-async def dashboard_summary(x_dashboard_key: Optional[str] = Header(None)) -> DashboardSummary:
-    _require_dashboard_key(x_dashboard_key)
+async def dashboard_summary() -> DashboardSummary:
     _auto_finalize_inactive_sessions()
-    return dashboard_service.summary()
+    return dashboard_service.summary(raw_events=raw_event_count())
 
 
 @app.get("/dashboard/api/sessions", response_model=List[DashboardSessionCard])
 async def dashboard_sessions(
     limit: int = Query(default=50, ge=1, le=200),
-    x_dashboard_key: Optional[str] = Header(None),
 ) -> List[DashboardSessionCard]:
-    _require_dashboard_key(x_dashboard_key)
     _auto_finalize_inactive_sessions()
     return dashboard_service.list_sessions(limit=limit)
 
 
 @app.get("/dashboard/api/sessions/{session_id}", response_model=DashboardSessionDetail)
-async def dashboard_session_detail(
-    session_id: str,
-    x_dashboard_key: Optional[str] = Header(None),
-) -> DashboardSessionDetail:
-    _require_dashboard_key(x_dashboard_key)
+async def dashboard_session_detail(session_id: str) -> DashboardSessionDetail:
     _auto_finalize_inactive_sessions()
     try:
         return dashboard_service.session_detail(session_id=session_id)
@@ -270,28 +259,47 @@ async def dashboard_session_detail(
         raise HTTPException(status_code=404, detail="Session not found")
 
 
+@app.get("/dashboard/api/incidents", response_model=List[DashboardIncident])
+async def dashboard_incidents() -> List[DashboardIncident]:
+    """Feature 3: correlated alerts declared as ranked, severity-labelled incidents."""
+    _auto_finalize_inactive_sessions()
+    return dashboard_service.incidents()
+
+
 @app.get("/dashboard/api/map", response_model=List[DashboardMapPoint])
-async def dashboard_map(x_dashboard_key: Optional[str] = Header(None)) -> List[DashboardMapPoint]:
-    _require_dashboard_key(x_dashboard_key)
+async def dashboard_map() -> List[DashboardMapPoint]:
     _auto_finalize_inactive_sessions()
     return dashboard_service.map_points()
 
 
-# Debug endpoints (protected by dashboard key)
+@app.get("/dashboard/api/models")
+async def dashboard_models():
+    """Configured free-model chain plus what OpenRouter currently advertises as free."""
+    live = list_free_models()
+    return {
+        "configured": list(OPENROUTER_MODELS),
+        "configuredAvailable": [m for m in OPENROUTER_MODELS if m in live] if live else [],
+        "liveFreeModels": live,
+        "health": model_health_snapshot(),
+        "apiKeyConfigured": bool(OPENROUTER_API_KEY),
+    }
+
+
+# Debug endpoints
 @app.post("/dashboard/api/debug/detect-scam")
-async def debug_detect_scam(req: DebugTextRequest, x_dashboard_key: Optional[str] = Header(None)):
-    _require_dashboard_key(x_dashboard_key)
+async def debug_detect_scam(req: DebugTextRequest):
     result = scam_detector.detect(req.text)
-    behavior = behavior_analyzer.analyze(
-        req.text,
-        _openai_client() if ENABLE_LLM_BEHAVIOR_ANALYSIS else None,
-        _gemini_client() if ENABLE_LLM_BEHAVIOR_ANALYSIS else None,
-    )
+    behavior = behavior_analyzer.analyze(req.text, _llm_client() if ENABLE_LLM_BEHAVIOR_ANALYSIS else None)
     return {
         "isScam": result.is_scam,
         "confidence": result.confidence,
         "category": result.category,
         "score": result.score,
+        "language": result.language,
+        "languageName": result.language_name,
+        "languageConfidence": result.language_confidence,
+        "vernacularScore": result.vernacular_score,
+        "vernacularTerms": result.vernacular_terms,
         "behaviorScore": behavior.score,
         "behaviorIndicators": behavior.indicators,
         "triggers": result.triggers,
@@ -300,48 +308,34 @@ async def debug_detect_scam(req: DebugTextRequest, x_dashboard_key: Optional[str
 
 
 @app.post("/dashboard/api/debug/extract-intelligence")
-async def debug_extract_intelligence(req: DebugTextRequest, x_dashboard_key: Optional[str] = Header(None)):
-    _require_dashboard_key(x_dashboard_key)
+async def debug_extract_intelligence(req: DebugTextRequest):
     intel = Intelligence()
     extract_intelligence([req.text], intel)
     return {
-        "callback": intel.to_callback_payload(),
+        "indicators": intel.to_indicator_payload(),
         "extended": intel.to_extended_payload(),
     }
 
 
 @app.get("/dashboard/api/debug/llm-gate")
-async def debug_llm_gate(x_dashboard_key: Optional[str] = Header(None)):
-    _require_dashboard_key(x_dashboard_key)
+async def debug_llm_gate():
     return llm_call_gate.snapshot().to_dict()
 
 
 @app.delete("/dashboard/api/debug/sessions")
-async def debug_clear_sessions(x_dashboard_key: Optional[str] = Header(None)):
-    _require_dashboard_key(x_dashboard_key)
+async def debug_clear_sessions():
     cleared = session_manager.clear()
     return {"status": "success", "cleared": cleared}
-
-
-@app.post("/dashboard/api/debug/send-callback/{session_id}")
-async def debug_send_callback(session_id: str, x_dashboard_key: Optional[str] = Header(None)):
-    _require_dashboard_key(x_dashboard_key)
-    state = session_manager.get(session_id)
-    if not state:
-        raise HTTPException(status_code=404, detail="Session not found")
-    session_manager.finalize_and_close(state, build_agent_notes(state), total_messages=len(state.transcript))
-    callback_service.send_async(state, total_messages=len(state.transcript))
-    return {"status": "success"}
 
 
 @app.post("/api/message")
 async def handle_message(event: MessageEvent, x_api_key: Optional[str] = Header(None)):
     _require_api_key(x_api_key)
+    _count_event()
     request_deadline = time.time() + REQUEST_TIMEOUT_BUDGET_SECONDS
     session_manager.maybe_cleanup()
     _auto_finalize_inactive_sessions(skip_session_id=event.sessionId)
-    openai_client = _openai_client()
-    gemini_client = _gemini_client()
+    llm_client = _llm_client()
 
     state = session_manager.get_or_create(event.sessionId, _session_factory)
 
@@ -350,11 +344,6 @@ async def handle_message(event: MessageEvent, x_api_key: Optional[str] = Header(
         session_manager.append_transcript(state, event.message.sender, event.message.text, event.message.timestamp)
         reply = _closed_reply(state)
         session_manager.append_transcript(state, "user", reply, int(time.time() * 1000), provider="rules")
-        if state.finalized and not state.callback_sent:
-            callback_service.send_async(
-                state,
-                total_messages=state.final_total_messages_exchanged or len(state.transcript),
-            )
         return {"status": "success", "reply": reply}
 
     session_manager.seed_history_if_needed(state, event.conversationHistory)
@@ -372,9 +361,19 @@ async def handle_message(event: MessageEvent, x_api_key: Optional[str] = Header(
     )
     behavior = behavior_analyzer.analyze(
         incoming_scammer_text,
-        openai_client if allow_behavior_llm else None,
-        gemini_client if allow_behavior_llm else None,
+        llm_client if allow_behavior_llm else None,
     )
+
+    # Feature 11: record the language before generating a reply, so the persona
+    # answers in the language the scammer is actually using.
+    if event.message.sender == "scammer" and incoming_scammer_text:
+        session_manager.update_language(
+            state,
+            code=detection.language,
+            name=detection.language_name,
+            confidence=detection.language_confidence,
+            vernacular_score=detection.vernacular_score,
+        )
 
     rolling_score = _rolling_score(
         state.rolling_scam_score,
@@ -431,15 +430,14 @@ async def handle_message(event: MessageEvent, x_api_key: Optional[str] = Header(
         and _has_time_budget(request_deadline, (2 * LLM_TIMEOUT_SECONDS) + 1)
         and llm_call_gate.allow("extraction", scammer_message_index=incoming_scammer_index)
     ):
-        callback_payload, extended_payload = extract_structured_intelligence(
+        indicator_payload, extended_payload = extract_structured_intelligence(
             text=event.message.text,
-            openai=openai_client,
-            gemini=gemini_client,
+            llm=llm_client,
             timeout_hint_seconds=LLM_TIMEOUT_SECONDS,
         )
         session_manager.update_intel(
             state,
-            lambda intel: (intel.merge_callback_payload(callback_payload), intel.merge_extended_payload(extended_payload)),
+            lambda intel: (intel.merge_indicator_payload(indicator_payload), intel.merge_extended_payload(extended_payload)),
         )
         session_manager.update_llm_extraction_time(state)
 
@@ -454,8 +452,7 @@ async def handle_message(event: MessageEvent, x_api_key: Optional[str] = Header(
         reply, provider = generate_agent_reply(
             state,
             event.metadata,
-            openai_client,
-            gemini_client,
+            llm_client,
             max_history=AGENT_MAX_HISTORY_MESSAGES,
         )
     elif state.scam_detected:
@@ -474,25 +471,13 @@ async def handle_message(event: MessageEvent, x_api_key: Optional[str] = Header(
 
     if should_finalize(state):
         session_manager.finalize_and_close(state, build_agent_notes(state), total_messages=total_messages)
-        callback_service.send_async(state, total_messages=state.final_total_messages_exchanged or total_messages)
 
     response = {"status": "success", "reply": reply}
     if EXTENDED_RESPONSE:
-        final_result = _build_final_output(state, state.final_total_messages_exchanged or total_messages)
+        incident = incident_index(session_manager.list_sessions()).get(state.session_id)
         response.update(
             {
-                "scamDetected": state.scam_detected,
-                "scamCategory": state.scam_category,
-                "scamConfidence": state.scam_confidence,
-                "rollingScamScore": state.rolling_scam_score,
-                "strategyState": state.strategy_state,
-                "engagementComplete": state.finalized,
-                "persona": state.persona_label,
-                "replyProvider": state.reply_provider,
-                "extractedIntelligence": state.intel.to_callback_payload(),
-                "extendedIntelligence": state.intel.to_extended_payload(),
-                "totalMessagesExchanged": total_messages,
-                "finalResult": final_result,
+                "report": session_report(state, incident),
                 "llmLoadGate": llm_call_gate.snapshot().to_dict(),
             }
         )
@@ -500,9 +485,54 @@ async def handle_message(event: MessageEvent, x_api_key: Optional[str] = Header(
     return response
 
 
-@app.post("/")
-async def root_entry(event: MessageEvent, x_api_key: Optional[str] = Header(None)):
-    return await handle_message(event, x_api_key)
+@app.post("/api/ingest")
+async def ingest_batch(batch: IngestBatch, x_api_key: Optional[str] = Header(None)):
+    """
+    Bulk event intake.
+
+    A security team's problem is volume, so events arrive in batches, not one
+    conversation at a time. Each event runs the full pipeline; one bad event does not
+    sink the batch, and the response is the triage funnel - what the batch actually
+    reduced to once correlated and prioritised.
+    """
+    _require_api_key(x_api_key)
+
+    accepted, failed = 0, []
+    for event in batch.events:
+        try:
+            await handle_message(event, x_api_key)
+            accepted += 1
+        except HTTPException:
+            raise
+        except Exception as exc:  # keep ingesting; report the casualty
+            logger.warning("Ingest failed for session %s: %s", event.sessionId, exc)
+            failed.append({"sessionId": event.sessionId, "error": str(exc)})
+
+    report = threat_report(session_manager.list_sessions(), raw_event_count())
+    return {
+        "status": "success",
+        "accepted": accepted,
+        "failed": failed,
+        "triageFunnel": report["triageFunnel"],
+        "incidents": report["incidents"],
+    }
+
+
+@app.get("/api/report/threat")
+async def threat_report_endpoint(x_api_key: Optional[str] = Header(None)):
+    """Every declared incident, ranked, with the triage funnel. Our own schema."""
+    _require_api_key(x_api_key)
+    _auto_finalize_inactive_sessions()
+    return threat_report(session_manager.list_sessions(), raw_event_count())
+
+
+@app.get("/api/report/session/{session_id}")
+async def session_report_endpoint(session_id: str, x_api_key: Optional[str] = Header(None)):
+    _require_api_key(x_api_key)
+    state = session_manager.get(session_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return session_report(state, incident_index(session_manager.list_sessions()).get(session_id))
 
 
 if __name__ == "__main__":

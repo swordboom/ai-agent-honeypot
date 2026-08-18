@@ -1,6 +1,8 @@
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, List, Sequence, Union
+
+from agent.multilingual import detect_language, scan as multilingual_scan
 
 
 URL_PATTERN = re.compile(r"(https?://\S+|www\.\S+)", re.IGNORECASE)
@@ -42,6 +44,12 @@ KEYWORD_WEIGHTS: Dict[str, int] = {
     "credit": 1,
     "wallet": 2,
     "invoice": 2,
+    "arrest": 3,
+    "warrant": 3,
+    "cbi": 3,
+    "narcotics": 3,
+    "parcel": 2,
+    "aadhaar": 2,
 }
 
 
@@ -53,6 +61,11 @@ class ScamDetectionResult:
     score: int
     triggers: List[str]
     suspicious_keywords: List[str]
+    language: str = "en"
+    language_name: str = "English"
+    language_confidence: float = 0.0
+    vernacular_score: int = 0
+    vernacular_terms: List[str] = field(default_factory=list)
 
 
 class ScamDetector:
@@ -100,12 +113,23 @@ class ScamDetector:
             score += 2
             triggers.append("ifsc")
 
+        # Feature 11: vernacular scam vocabulary scores on the same scale as English.
+        vernacular = multilingual_scan(combined)
+        language = detect_language(combined)
+        if vernacular.score:
+            score += vernacular.score
+            triggers.extend(vernacular.matched_terms)
+            triggers.extend(f"lang:{code}" for code in vernacular.languages_hit)
+            suspicious.extend(vernacular.matched_terms)
+
         triggers = sorted(set(triggers))
         suspicious = sorted(set(suspicious))
 
         confidence = min(1.0, score / 10.0)
         is_scam = score >= self.suspect_threshold
         category = self._category_from_signals(lowered, triggers, suspicious)
+        if category == "GENERIC_SCAM" and vernacular.category_hint:
+            category = vernacular.category_hint
 
         return ScamDetectionResult(
             is_scam=is_scam,
@@ -114,9 +138,16 @@ class ScamDetector:
             score=score,
             triggers=triggers,
             suspicious_keywords=suspicious,
+            language=language.code,
+            language_name=language.name,
+            language_confidence=language.confidence,
+            vernacular_score=vernacular.score,
+            vernacular_terms=vernacular.matched_terms,
         )
 
     def _category_from_signals(self, lowered: str, triggers: List[str], suspicious: List[str]) -> str:
+        if "arrest" in suspicious or "warrant" in suspicious or "narcotics" in suspicious:
+            return "DIGITAL_ARREST"
         if "upi" in triggers or "upi" in suspicious:
             return "UPI_FRAUD"
         if "link" in triggers or "click" in lowered:

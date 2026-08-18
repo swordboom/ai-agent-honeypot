@@ -45,9 +45,10 @@ class Intelligence:
     def has_high_value(self) -> bool:
         return any([self.bank_accounts, self.upi_ids, self.phishing_links])
 
-    def to_callback_payload(self) -> Dict[str, List[str]]:
+    def to_indicator_payload(self) -> Dict[str, List[str]]:
         return {
-            # GUVI schema only provides "bankAccounts"; include IFSC codes here as well.
+            # IFSC codes ride along with account numbers - both identify the same
+            # beneficiary and a downstream bank report needs them together.
             "bankAccounts": sorted(self.bank_accounts.union(self.ifsc_codes)),
             "upiIds": sorted(self.upi_ids),
             "phishingLinks": sorted(self.phishing_links),
@@ -72,7 +73,7 @@ class Intelligence:
             "ifscCodes": sorted(self.ifsc_codes),
         }
 
-    def merge_callback_payload(self, payload: Dict[str, List[str]]) -> None:
+    def merge_indicator_payload(self, payload: Dict[str, List[str]]) -> None:
         self.bank_accounts.update(payload.get("bankAccounts", []))
         self.upi_ids.update(payload.get("upiIds", []))
         self.phishing_links.update(payload.get("phishingLinks", []))
@@ -110,6 +111,13 @@ class SessionState:
     last_behavior_risk_score: float = 0.0
     strategy_state: str = "Neutral"
 
+    # Feature 11: language the scammer operates in.
+    language: str = "en"
+    language_name: str = "English"
+    language_confidence: float = 0.0
+    languages_seen: List[str] = field(default_factory=list)
+    vernacular_score: float = 0.0
+
     agent_turns: int = 0
     scammer_messages: int = 0
 
@@ -129,11 +137,3 @@ class SessionState:
     reply_provider: str = "rules"
 
     last_llm_extraction_at: Optional[float] = None
-
-    callback_sent: bool = False
-    callback_payload_signature: Optional[str] = None
-    callback_updates: int = 0
-    callback_attempts: int = 0
-    callback_last_status: Optional[int] = None
-    callback_last_error: Optional[str] = None
-    callback_last_sent_at: Optional[float] = None

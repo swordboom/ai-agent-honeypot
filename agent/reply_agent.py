@@ -1,8 +1,8 @@
 import hashlib
-import random
 from typing import Dict, List, Optional, Tuple
 
-from agent.llm_clients import GeminiClient, OpenAIClient, sanitize_reply
+from agent.llm_clients import OpenRouterClient, sanitize_reply
+from agent.multilingual import reply_language_instruction
 from agent.personas import PERSONAS, Persona
 from models.api import Metadata
 from models.session import SessionState, TranscriptMessage
@@ -45,6 +45,9 @@ def _system_prompt(persona: Persona, metadata: Optional[Metadata], state: Sessio
         "Do not disclose that you are an AI, bot, or honeypot. Do not provide illegal or harmful instructions. "
         "Do not insult or harass. Keep reply under 35 words unless clarification is needed. "
         "Prefer a soft, investigative tone and include at least one clarifying question when practical. "
+        # Feature 11: a victim who suddenly switches to English is an obvious tell.
+        f"{reply_language_instruction(state.language)} "
+        f"Detected scammer language: {state.language_name}. "
         f"Scam category: {state.scam_category}. "
         f"Strategy state: {state.strategy_state}. "
         f"Rolling risk score: {state.rolling_scam_score}. "
@@ -178,8 +181,97 @@ def _human_fallback_candidates(state: SessionState) -> List[str]:
     return candidates
 
 
+# Deterministic last-resort replies per language. The LLM handles normal traffic;
+# these keep a vernacular session from suddenly answering in English when every free
+# model is rate-limited, which would blow the persona instantly.
+# ponytail: one line per intel target per language, not a template engine.
+VERNACULAR_FALLBACKS: Dict[str, Dict[str, List[str]]] = {
+    "hi": {
+        "upi": [
+            "मैं अभी भेज रहा हूँ। अपना UPI ID और रकम एक बार फिर से भेजिए।",
+            "पेमेंट स्क्रीन खुली है। UPI ID सही स्पेलिंग के साथ दोबारा भेजें।",
+        ],
+        "link": [
+            "लिंक मेरे फोन पर नहीं खुल रहा है। कृपया पूरा लिंक फिर से भेजिए।",
+            "पेज लोड नहीं हुआ। वही लिंक एक बार और भेजें।",
+        ],
+        "phone": [
+            "कॉल बार-बार कट रही है। एक कॉलबैक नंबर भेज दीजिए।",
+            "मुझे किस नंबर पर कॉल करना है? हेल्पलाइन नंबर भेजिए।",
+        ],
+        "account": [
+            "आगे बढ़ने से पहले खाता नंबर और IFSC एक बार कन्फर्म कर दीजिए।",
+            "अकाउंट नंबर और IFSC भेजिए, मैं अभी ट्रांसफर करता हूँ।",
+        ],
+        "generic": [
+            "मुझे थोड़ी उलझन हो रही है। कृपया पूरे स्टेप्स छोटे पॉइंट्स में एक बार भेजिए।",
+            "नेटवर्क स्लो है। रेफरेंस नंबर और डिटेल्स एक साथ फिर से भेज दीजिए।",
+        ],
+        "probe": [
+            "यह किस बारे में है? अपना ऑफिशियल हेल्पलाइन नंबर और केस रेफरेंस भेजिए।",
+            "मुझे समझ नहीं आया। कृपया अपनी ऑफिशियल डिटेल्स के साथ फिर से समझाइए।",
+        ],
+    },
+    "bn": {
+        "upi": ["আমি এখনই পাঠাচ্ছি। আপনার UPI আইডি আর টাকার অঙ্ক আবার পাঠান।"],
+        "link": ["লিঙ্কটা আমার ফোনে খুলছে না। পুরো লিঙ্কটা আবার পাঠান।"],
+        "phone": ["লাইন বারবার কেটে যাচ্ছে। একটা কলব্যাক নম্বর পাঠান।"],
+        "account": ["এগোনোর আগে অ্যাকাউন্ট নম্বর আর IFSC একবার নিশ্চিত করুন।"],
+        "generic": ["একটু গুলিয়ে যাচ্ছে। ধাপগুলো ছোট পয়েন্টে আরেকবার পাঠান।"],
+        "probe": ["এটা কী নিয়ে? আপনার অফিসিয়াল হেল্পলাইন আর কেস রেফারেন্স পাঠান।"],
+    },
+    "ta": {
+        "upi": ["இப்போது அனுப்புகிறேன். உங்கள் UPI ஐடி மற்றும் தொகையை மீண்டும் அனுப்புங்கள்."],
+        "link": ["இணைப்பு என் ஃபோனில் திறக்கவில்லை. முழு இணைப்பையும் மீண்டும் அனுப்புங்கள்."],
+        "phone": ["அழைப்பு துண்டிக்கப்படுகிறது. ஒரு தொடர்பு எண் அனுப்புங்கள்."],
+        "account": ["தொடர்வதற்கு முன் கணக்கு எண் மற்றும் IFSC ஐ உறுதிப்படுத்துங்கள்."],
+        "generic": ["எனக்கு குழப்பமாக உள்ளது. படிகளை சிறு புள்ளிகளாக மீண்டும் அனுப்புங்கள்."],
+        "probe": ["இது எதைப் பற்றியது? உங்கள் அதிகாரப்பூர்வ எண் மற்றும் வழக்கு குறிப்பை அனுப்புங்கள்."],
+    },
+    "te": {
+        "upi": ["ఇప్పుడే పంపుతున్నాను. మీ UPI ఐడీ మరియు మొత్తాన్ని మళ్లీ పంపండి."],
+        "link": ["లింక్ నా ఫోన్‌లో తెరవడం లేదు. పూర్తి లింక్ మళ్లీ పంపండి."],
+        "phone": ["కాల్ కట్ అవుతోంది. ఒక కాల్‌బ్యాక్ నంబర్ పంపండి."],
+        "account": ["ముందుకు వెళ్లే ముందు ఖాతా నంబర్ మరియు IFSC నిర్ధారించండి."],
+        "generic": ["నాకు కొంచెం గందరగోళంగా ఉంది. దశలను చిన్న పాయింట్లుగా మళ్లీ పంపండి."],
+        "probe": ["ఇది దేని గురించి? మీ అధికారిక హెల్ప్‌లైన్ మరియు కేసు రిఫరెన్స్ పంపండి."],
+    },
+    "mr": {
+        "upi": ["मी आत्ताच पाठवतो. तुमचा UPI आयडी आणि रक्कम पुन्हा पाठवा."],
+        "link": ["लिंक माझ्या फोनवर उघडत नाही. पूर्ण लिंक पुन्हा पाठवा."],
+        "phone": ["कॉल सतत कट होतोय. एक कॉलबॅक नंबर पाठवा."],
+        "account": ["पुढे जाण्यापूर्वी खाते क्रमांक आणि IFSC एकदा निश्चित करा."],
+        "generic": ["मला थोडा गोंधळ होतोय. सर्व स्टेप्स छोट्या पॉइंट्समध्ये पुन्हा पाठवा."],
+        "probe": ["हे कशाबद्दल आहे? तुमचा अधिकृत हेल्पलाइन नंबर आणि केस रेफरन्स पाठवा."],
+    },
+}
+
+
+def _vernacular_reply(state: SessionState, bucket: str, missing: List[str]) -> Optional[str]:
+    lists = VERNACULAR_FALLBACKS.get(state.language)
+    if not lists:
+        return None
+
+    key = bucket
+    if bucket == "target":
+        key = next((t for t in ("upi", "link", "phone", "account") if t in missing), "generic")
+
+    candidates = lists.get(key) or lists["generic"]
+    return _pick_non_repeating(
+        candidates,
+        _last_agent_reply(state),
+        recent_replies=_recent_agent_replies(state, limit=6),
+        seed_hint=f"{state.session_id}:{state.agent_turns}:{key}",
+    )
+
+
 def generate_rule_based_reply(state: SessionState) -> str:
     missing = missing_intel_targets(state)
+
+    vernacular = _vernacular_reply(state, "target", missing)
+    if vernacular:
+        return vernacular
+
     last_reply = _last_agent_reply(state)
     recent_replies = _recent_agent_replies(state, limit=6)
     seed_base = f"{state.session_id}:{state.agent_turns}"
@@ -298,6 +390,10 @@ def generate_rule_based_reply(state: SessionState) -> str:
 
 
 def generate_probe_reply(state: SessionState) -> str:
+    vernacular = _vernacular_reply(state, "probe", [])
+    if vernacular:
+        return vernacular
+
     last_reply = _last_agent_reply(state)
     recent_replies = _recent_agent_replies(state, limit=6)
     seed_base = f"{state.session_id}:{state.scammer_messages}:{state.strategy_state}"
@@ -328,22 +424,20 @@ def generate_probe_reply(state: SessionState) -> str:
 def generate_agent_reply(
     state: SessionState,
     metadata: Optional[Metadata],
-    openai: Optional[OpenAIClient],
-    gemini: Optional[GeminiClient],
+    llm: Optional[OpenRouterClient],
     max_history: int,
 ) -> Tuple[str, str]:
+    """
+    OpenRouter free models generate the reply. `generate_rule_based_reply` is the
+    terminal safety net for when every free model is rate-limited - without it a
+    throttled session would return no reply at all and the engagement would die.
+    """
     messages = build_llm_messages(state, metadata, max_history=max_history)
 
-    if openai and openai.api_key:
-        raw = openai.chat(messages, temperature=0.7, max_tokens=120)
+    if llm and llm.api_key:
+        raw = llm.chat(messages, temperature=0.7, max_tokens=120)
         reply = sanitize_reply(raw)
         if reply:
-            return reply, "openai"
-
-    if gemini and gemini.api_key:
-        raw = gemini.chat(messages, temperature=0.7, max_tokens=120)
-        reply = sanitize_reply(raw)
-        if reply:
-            return reply, "gemini"
+            return reply, "openrouter"
 
     return generate_rule_based_reply(state), "rules"

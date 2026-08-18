@@ -1,69 +1,158 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Honey-Pot Dashboard</title>
+  <title>Honey-Pot Operations</title>
   <link rel="stylesheet" href="/static/dashboard.css" />
 </head>
 <body>
   <header class="topbar">
     <div>
-      <h1>Agentic Honey-Pot Dashboard</h1>
-      <p>Live scam engagement telemetry</p>
+      <h1>Agentic Honey-Pot &mdash; Operations</h1>
+      <p>Live scam engagement telemetry, incident triage and multi-language detection</p>
     </div>
-    <div class="auth-box">
-      <input id="dashboardKey" type="password" placeholder="x-dashboard-key" />
-      <button id="saveKeyBtn">Apply Key</button>
+    <div class="topbar-actions">
+      <span id="liveStatus" class="live-dot">connecting&hellip;</span>
+      <a class="navlink" href="/console">Operator console</a>
+      <button id="themeBtn" type="button">Dark mode</button>
+      <button id="refreshBtn" type="button">Refresh</button>
     </div>
   </header>
 
-  <main class="grid">
-    <section class="panel kpi-panel">
-      <h2>Summary</h2>
-      <div class="kpi-grid">
-        <div class="kpi"><span class="label">Active</span><span id="kpiActive" class="value">0</span></div>
-        <div class="kpi"><span class="label">Total Sessions</span><span id="kpiSessions" class="value">0</span></div>
-        <div class="kpi"><span class="label">Finalized</span><span id="kpiFinalized" class="value">0</span></div>
-        <div class="kpi"><span class="label">Time Wasted (s)</span><span id="kpiWasted" class="value">0</span></div>
+  <main>
+    <section class="tiles" aria-label="Key metrics">
+      <div class="tile">
+        <span class="label">Needs action now</span>
+        <span id="tileIncidents" class="value">0</span>
+        <span id="tileIncidentsSub" class="sub">no incidents declared</span>
       </div>
-      <div class="subgrid">
-        <div class="kpi small"><span class="label">Bank IDs</span><span id="kpiBank" class="value">0</span></div>
-        <div class="kpi small"><span class="label">UPI IDs</span><span id="kpiUpi" class="value">0</span></div>
-        <div class="kpi small"><span class="label">Links</span><span id="kpiLinks" class="value">0</span></div>
-        <div class="kpi small"><span class="label">Phones</span><span id="kpiPhones" class="value">0</span></div>
+      <div class="tile">
+        <span class="label">Events &rarr; actionable</span>
+        <span id="tileFunnel" class="value">0 &rarr; 0</span>
+        <span id="tileFunnelSub" class="sub">triage funnel</span>
+      </div>
+      <div class="tile">
+        <span class="label">Active engagements</span>
+        <span id="tileActive" class="value">0</span>
+        <span id="tileActiveSub" class="sub">0 sessions total</span>
+      </div>
+      <div class="tile">
+        <span class="label">Scammer time wasted</span>
+        <span id="tileWasted" class="value">0s</span>
+        <span id="tileWastedSub" class="sub">across all sessions</span>
+      </div>
+      <div class="tile">
+        <span class="label">Messages exchanged</span>
+        <span id="tileMessages" class="value">0</span>
+        <span id="tileMessagesSub" class="sub">0 finalized sessions</span>
+      </div>
+      <div class="tile">
+        <span class="label">Actionable intel</span>
+        <span id="tileIntel" class="value">0</span>
+        <span id="tileIntelSub" class="sub">UPI 0 &middot; links 0 &middot; phones 0 &middot; accounts 0</span>
       </div>
     </section>
 
     <section class="panel">
-      <h2>Recent Sessions</h2>
-      <ul id="sessionList" class="session-list"></ul>
+      <h2>Declared incidents</h2>
+      <p class="hint">
+        Alerts sharing a payment ID, phone, domain or account are grouped into one attack,
+        scored 0&ndash;100 on attack type, breadth, velocity, captured intel and confidence, then
+        given a response plan &mdash; what to do, to which target, by whom, by when.
+      </p>
+      <ul id="incidentList" class="incident-list"></ul>
     </section>
 
-    <section class="panel">
-      <h2>Session Detail</h2>
-      <div id="sessionMeta" class="meta">Select a session.</div>
-      <h3>Transcript</h3>
-      <div id="transcript" class="transcript"></div>
-      <h3>Extracted Intelligence</h3>
-      <pre id="intel" class="intel"></pre>
-      <h3>Extended Intelligence</h3>
-      <pre id="intelExtended" class="intel"></pre>
-      <h3>Final Output</h3>
-      <pre id="finalOutput" class="intel"></pre>
+    <section class="row-3">
+      <div class="panel">
+        <h2>Incidents by severity</h2>
+        <p class="hint">Triage order &mdash; work top down.</p>
+        <svg id="severityChart" class="chart" role="img" aria-label="Incident count by severity"></svg>
+      </div>
+      <div class="panel">
+        <h2>Scam categories</h2>
+        <p class="hint">Confirmed-scam sessions by attack type.</p>
+        <svg id="categoryChart" class="chart" role="img" aria-label="Sessions by scam category"></svg>
+      </div>
+      <div class="panel">
+        <h2>Scammer language</h2>
+        <p class="hint">Detected operating language per session.</p>
+        <svg id="languageChart" class="chart" role="img" aria-label="Sessions by detected language"></svg>
+      </div>
     </section>
 
-    <section class="panel">
-      <h2>Country Threat Map</h2>
-      <table class="map-table">
-        <thead>
-          <tr><th>Country</th><th>Code</th><th>Count</th></tr>
-        </thead>
-        <tbody id="mapTableBody"></tbody>
-      </table>
+    <section class="row-2">
+      <div class="panel">
+        <h2>Activity, last hour</h2>
+        <p class="hint">Five-minute buckets. Separate scales &mdash; compare shape, not height.</p>
+        <svg id="timelineMessages" class="chart" role="img" aria-label="Messages per five minutes"></svg>
+        <svg id="timelineSessions" class="chart" role="img" aria-label="New sessions per five minutes"></svg>
+      </div>
+      <div class="panel">
+        <h2>Multi-language detector</h2>
+        <p class="hint">
+          Paste a scam message in any supported language &mdash; English, Hindi, Bengali, Tamil,
+          Telugu or Marathi, native script or romanized.
+        </p>
+        <form id="probeForm" class="probe-form">
+          <textarea id="probeText" placeholder="aapka account band ho jayega, turant OTP bhejo"></textarea>
+          <button type="submit">Analyse</button>
+        </form>
+        <div class="probe-samples" id="probeSamples"></div>
+        <div id="probeResult" class="probe-result"></div>
+      </div>
+    </section>
+
+    <section class="row-sessions">
+      <div class="panel">
+        <h2>Sessions</h2>
+        <p class="hint">Most recently active first.</p>
+        <ul id="sessionList" class="session-list"></ul>
+      </div>
+      <div class="panel">
+        <h2>Session detail</h2>
+        <div id="sessionMeta" class="meta">Select a session.</div>
+        <h3>Transcript</h3>
+        <div id="transcript" class="transcript"></div>
+        <h3>Extracted intelligence</h3>
+        <pre id="intel" class="intel"></pre>
+        <h3>Extended intelligence</h3>
+        <pre id="intelExtended" class="intel"></pre>
+        <h3>Session report (JSON)</h3>
+        <pre id="finalOutput" class="intel"></pre>
+      </div>
+    </section>
+
+    <section class="row-2">
+      <div class="panel">
+        <h2>Caller origin</h2>
+        <p class="hint">Derived from captured phone numbers.</p>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr><th>Country</th><th>Code</th><th class="num">Numbers</th></tr>
+            </thead>
+            <tbody id="mapTableBody"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="panel">
+        <h2>Model chain</h2>
+        <p class="hint">OpenRouter free models, tried in order until one answers.</p>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr><th>Model</th><th>State</th></tr>
+            </thead>
+            <tbody id="modelTableBody"></tbody>
+          </table>
+        </div>
+      </div>
     </section>
   </main>
 
+  <div id="tooltip" role="tooltip" aria-hidden="true"></div>
   <script src="/static/dashboard.js"></script>
 </body>
 </html>

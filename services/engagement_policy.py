@@ -11,8 +11,9 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
-# Evaluation platform can end turns quickly; this mode avoids hanging sessions waiting for long duration.
-STRICT_EVAL_FINALIZATION = _env_bool("STRICT_EVAL_FINALIZATION", True)
+# Close a session on turn/message thresholds rather than waiting out the duration
+# clock, so short bursts do not leave sessions hanging open forever.
+FAST_SESSION_CLOSE = _env_bool("FAST_SESSION_CLOSE", True)
 
 
 def should_finalize(state: SessionState) -> bool:
@@ -31,8 +32,8 @@ def should_finalize(state: SessionState) -> bool:
     if state.agent_turns >= 12:
         return True
 
-    # Fast-path closure for official evaluations where turn limits are reached before 60s.
-    if STRICT_EVAL_FINALIZATION:
+    # Fast path for short bursts that hit the turn limit well before 60s.
+    if FAST_SESSION_CLOSE:
         if state.agent_turns >= 8 and total_messages >= 12 and actionable_categories >= 2:
             return True
         if state.agent_turns >= 10 and total_messages >= 16 and actionable_categories >= 1:

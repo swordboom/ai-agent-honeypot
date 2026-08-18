@@ -2,23 +2,35 @@ import re
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
-from agent.llm_clients import GeminiClient, OpenAIClient, extract_json_object
+from agent.llm_clients import OpenRouterClient, extract_json_object
 
 
+# Patterns cover English plus the vernacular equivalents, so a Hindi/Tamil/Bengali
+# message raises the same behavioural flags as its English twin (Feature 11).
 URGENCY_PATTERN = re.compile(
-    r"(?i)\b(urgent|immediately|right now|within \d+ (minute|minutes|hour|hours)|final warning|last warning)\b"
+    r"(?i)\b(urgent|immediately|right now|within \d+ (minute|minutes|hour|hours)|final warning|last warning"
+    r"|turant|jaldi|abhi|ekhoni|taratari|udanadiyaga|ventane|tabadtob)\b"
+    r"|तुरंत|जल्दी|अंतिम चेतावनी|এখনই|তাড়াতাড়ি|உடனடியாக|వెంటనే|ताबडतोब"
 )
 AUTHORITY_PATTERN = re.compile(
-    r"(?i)\b(bank|sbi|security team|fraud team|customs|police|rbi|compliance|official)\b"
+    r"(?i)\b(bank|sbi|security team|fraud team|customs|police|rbi|compliance|official|cbi|narcotics)\b"
+    r"|बैंक|पुलिस|आयकर|ব্যাংক|পুলিশ|வங்கி|காவல்துறை|బ్యాంకు|పోలీసు|बँक|पोलीस"
 )
-REWARD_PATTERN = re.compile(r"(?i)\b(prize|lottery|reward|cashback|gift|bonus|offer)\b")
+REWARD_PATTERN = re.compile(
+    r"(?i)\b(prize|lottery|reward|cashback|gift|bonus|offer|inaam|puroskar|parisu|bahumati|bakshis)\b"
+    r"|इनाम|लॉटरी|पुरस्कार|পুরস্কার|লটারি|பரிசு|బహుమతి|बक्षीस"
+)
 VERIFY_PATTERN = re.compile(
-    r"(?i)\b(verify|verification|otp|one time password|pin|upi pin|cvv|account number)\b"
+    r"(?i)\b(verify|verification|otp|one time password|pin|upi pin|cvv|account number|kyc)\b"
+    r"|ओटीपी|केवाईसी|सत्यापन|ওটিপি|কেওয়াইসি|যাচাই|ஓடிபி|சரிபார்ப்பு|ఓటీపీ|ధృవీకరణ|केवायसी|पडताळणी"
 )
 LINK_PRESSURE_PATTERN = re.compile(
     r"(?i)\b(click|open|tap|visit)\b.*\b(link|url|site|website)\b|\bhttps?://\S+|www\.\S+"
+    r"|लिंक|क्लिक|লিঙ্ক|இணைப்பு|లింక్|दुवा"
 )
-ALT_CHANNEL_PATTERN = re.compile(r"(?i)\b(call|whatsapp|telegram|email|contact)\b")
+ALT_CHANNEL_PATTERN = re.compile(
+    r"(?i)\b(call|whatsapp|telegram|email|contact)\b|कॉल|फोन|ফোন|அழைப்பு|ఫోన్"
+)
 
 
 @dataclass(frozen=True)
@@ -72,24 +84,23 @@ class BehaviorAnalyzer:
             category_hint=category,
         )
 
-    def _llm_analysis(
-        self,
-        text: str,
-        openai: Optional[OpenAIClient],
-        gemini: Optional[GeminiClient],
-    ) -> Optional[BehavioralAnalysisResult]:
+    def _llm_analysis(self, text: str, llm: Optional[OpenRouterClient]) -> Optional[BehavioralAnalysisResult]:
         if not text:
             return None
-        if not ((openai and openai.api_key) or (gemini and gemini.api_key)):
+        if not (llm and llm.api_key):
             return None
 
         system_prompt = (
-            "Analyze scam intent behavior in the message and return ONLY JSON with keys:\n"
+            "You analyse scam intent in messages sent to Indian consumers. Messages may be in "
+            "English, Hindi, Bengali, Tamil, Telugu, Marathi, native script or romanized, or "
+            "code-mixed. Judge the intent, not the language.\n"
+            "Return ONLY JSON with keys:\n"
             "- riskScore: number 0-10\n"
             "- confidence: number 0-1\n"
             "- indicators: string[] (urgency, authority_impersonation, reward_bait, "
             "verification_or_secret_request, external_link_pressure, alternate_channel_push)\n"
-            "- categoryHint: string (UPI_FRAUD, PHISHING, BANK_FRAUD, LOTTERY_SCAM, REFUND_SCAM, GENERIC_SCAM)\n"
+            "- categoryHint: string (UPI_FRAUD, PHISHING, BANK_FRAUD, KYC_FRAUD, LOTTERY_SCAM, "
+            "REFUND_SCAM, DIGITAL_ARREST, GENERIC_SCAM)\n"
             "No prose."
         )
         messages = [
@@ -97,16 +108,12 @@ class BehaviorAnalyzer:
             {"role": "user", "content": text},
         ]
 
-        raw = None
-        if openai and openai.api_key:
-            raw = openai.chat(
-                messages,
-                temperature=0.0,
-                max_tokens=180,
-                response_format={"type": "json_object"},
-            )
-        if not raw and gemini and gemini.api_key:
-            raw = gemini.chat(messages, temperature=0.0, max_tokens=180)
+        raw = llm.chat(
+            messages,
+            temperature=0.0,
+            max_tokens=180,
+            response_format={"type": "json_object"},
+        )
         if not raw:
             return None
 
@@ -135,14 +142,9 @@ class BehaviorAnalyzer:
             category_hint=category_hint,
         )
 
-    def analyze(
-        self,
-        text: str,
-        openai: Optional[OpenAIClient],
-        gemini: Optional[GeminiClient],
-    ) -> BehavioralAnalysisResult:
+    def analyze(self, text: str, llm: Optional[OpenRouterClient] = None) -> BehavioralAnalysisResult:
         rule_result = self._rule_based_analysis(text)
-        llm_result = self._llm_analysis(text, openai, gemini)
+        llm_result = self._llm_analysis(text, llm)
         if not llm_result:
             return rule_result
 

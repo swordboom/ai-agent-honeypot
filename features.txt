@@ -1,0 +1,19 @@
+Feature 3: Declare an Incident and Say How Serious It Is
+Right now: The system detects individual scam messages. It never officially says "this is an attack" as a whole
+event
+What's missing: Once related alerts are grouped, someone needs to raise a flag and say: "This group of alerts =
+one attack. And it is CRITICAL / HIGH / MEDIUM / LOW severity."
+What to add: An incident creator that:
+
+. Groups the connected alerts into one named incident
+. Scores how dangerous it is (based on how fast it's moving, what kind of attack, how many systems affected)
+. Labels it clearly so operators know what to prioritise first
+
+
+. Feature 11: Multi-Language Scam Detection
+The idea: Most Indian scammers don't operate in English. They use Hindi, Bengali, Tamil, Telugu, Marathi. Right
+now your system only understands English scam messages.
+This feature makes your system detect scams in all major Indian languages - because a scammer saying
+"aapka account band ho jayega" is just as dangerous as "your account will be blocked."
+Why judges love this: This is India-specific innovation. No generic global product does this well. You'd be
+solving a real Indian problem.
