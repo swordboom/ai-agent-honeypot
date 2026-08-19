@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Cyber Sentinel — AI Threat Intelligence</title>
+
+  <!-- Material Symbols -->
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" />
+
+  <!-- Google Fonts: Geist, IBM Plex Mono, Inter -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500&display=swap" rel="stylesheet" />
+
+  <!-- Tailwind CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            'cs-bg':        '#faf9fb',
+            'cs-primary':   '#000f22',
+            'cs-primary-c': '#0a2540',
+            'cs-on-primary':'#ffffff',
+            'cs-surf-low':  '#f5f3f6',
+            'cs-surf-var':  '#e3e2e5',
+            'cs-outline-v': '#c4c6ce',
+            'cs-outline':   '#74777e',
+            'cs-on-surf':   '#1b1c1e',
+            'cs-secondary': '#43474d',
+            'cs-error':     '#ba1a1a',
+            'cs-error-c':   '#ffdad6',
+            'cs-on-error-c':'#93000a',
+            'cs-warning':   '#d97706',
+          },
+          fontFamily: {
+            'geist': ['"Geist"', '"IBM Plex Mono"', 'monospace', 'sans-serif'],
+            'mono':  ['"IBM Plex Mono"', 'monospace'],
+            'body':  ['"Inter"', 'sans-serif'],
+          },
+          borderRadius: {
+            DEFAULT: '0px',
+            'none': '0px',
+            'sm': '0px',
+            'md': '0px',
+            'lg': '0px',
+            'xl': '0px',
+            '2xl': '0px',
+            'full': '0px',
+          },
+        }
+      }
+    }
+  </script>
+
+  <!-- Sentinel Custom CSS -->
+  <link rel="stylesheet" href="/static/sentinel.css" />
+
+  <style>
+    * { border-radius: 0 !important; }
+    html { scroll-behavior: smooth; }
+  </style>
+</head>
+<body class="bg-cs-bg text-cs-on-surf">
+
+<!-- ================================================================
+     TOP NAV (fixed, 64px)
+     ================================================================ -->
+<header class="fixed top-0 left-0 right-0 z-50 bg-cs-bg border-b border-cs-outline-v" style="height:64px">
+  <div class="flex items-center h-full px-4 gap-0">
+
+    <!-- Brand -->
+    <div class="flex items-center gap-2 pr-6 border-r border-cs-outline-v h-full mr-4">
+      <span class="material-symbols-outlined text-cs-primary" style="font-size:22px">security</span>
+      <div>
+        <div class="font-mono font-bold text-cs-primary tracking-widest text-sm uppercase" style="line-height:1.1">Cyber Sentinel</div>
+        <div class="font-mono text-cs-outline" style="font-size:9px;letter-spacing:0.08em;text-transform:uppercase">AI Threat Intelligence</div>
+      </div>
+    </div>
+
+    <!-- Primary nav — 3 focused tabs -->
+    <nav class="flex items-center h-full gap-0">
+      <button
+        data-nav="honeypot"
+        class="nav-btn font-mono text-xs font-semibold uppercase tracking-wider px-6 h-full border-r border-cs-outline-v text-cs-secondary hover:text-cs-primary transition-colors"
+        style="background:none;border-top:none;border-left:none;border-bottom:none;cursor:pointer;letter-spacing:0.08em">
+        <span class="material-symbols-outlined" style="font-size:14px;vertical-align:middle;margin-right:5px">bug_report</span>Honeypot
+      </button>
+      <button
+        data-nav="url"
+        class="nav-btn font-mono text-xs font-semibold uppercase tracking-wider px-6 h-full border-r border-cs-outline-v text-cs-secondary hover:text-cs-primary transition-colors"
+        style="background:none;border-top:none;border-left:none;border-bottom:none;cursor:pointer;letter-spacing:0.08em">
+        <span class="material-symbols-outlined" style="font-size:14px;vertical-align:middle;margin-right:5px">link</span>URL / Domain
+      </button>
+      <button
+        data-nav="email"
+        class="nav-btn font-mono text-xs font-semibold uppercase tracking-wider px-6 h-full border-r border-cs-outline-v text-cs-secondary hover:text-cs-primary transition-colors"
+        style="background:none;border-top:none;border-left:none;border-bottom:none;cursor:pointer;letter-spacing:0.08em">
+        <span class="material-symbols-outlined" style="font-size:14px;vertical-align:middle;margin-right:5px">mail</span>Email
+      </button>
+    </nav>
+
+    <!-- Spacer -->
+    <div class="flex-1"></div>
+
+    <!-- RUN DEMO button -->
+    <button id="run-demo-btn" class="btn-primary text-xs mr-3">Run Demo</button>
+
+    <!-- Status dot -->
+    <div class="flex items-center gap-2 mr-3">
+      <span id="status-dot" class="inline-block w-2 h-2 bg-cs-outline" style="border-radius:50% !important"></span>
+      <span id="status-text" class="font-mono text-xs text-cs-outline">ready</span>
+    </div>
+
+    <!-- Settings icon -->
+    <button onclick="navigate('architecture')" style="background:none;border:none;cursor:pointer;padding:4px" class="text-cs-outline hover:text-cs-primary" title="Settings">
+      <span class="material-symbols-outlined" style="font-size:20px">settings</span>
+    </button>
+  </div>
+</header>
+
+<!-- ================================================================
+     MAIN CONTENT — full width, no sidebar
+     ================================================================ -->
+<div style="padding-top:64px;min-height:calc(100vh - 64px)">
+  <main style="width:100%;overflow-y:auto;min-height:calc(100vh - 64px);max-width:1400px;margin:0 auto">
+
+    <!-- ===========================================================
+         VIEW: HONEYPOT
+         =========================================================== -->
+    <section id="v-honeypot" class="view">
+      <!-- Page header -->
+      <div class="border-b border-cs-outline-v px-6 py-4 bg-cs-bg">
+        <h1 class="page-title">Honeypot — Simulate an Attack</h1>
+        <p class="font-body text-cs-secondary mt-1" style="font-size:13px">
+          Send messages as if you were a scammer. The AI honeypot replies to keep them engaged while quietly profiling the threat.
+          Use the attack scenarios on the right to replay known scam campaigns.
+        </p>
+      </div>
+
+      <div class="flex" style="min-height:600px">
+        <!-- Left: Chat column -->
+        <div class="border-r border-cs-outline-v flex flex-col" style="width:58.333%">
+          <!-- Session bar -->
+          <div class="border-b border-cs-outline-v px-4 py-2 flex items-center gap-2 bg-cs-surf-low">
+            <span class="font-mono text-xs text-cs-outline uppercase tracking-wider">Conversation ID</span>
+            <input id="hp-session-input" type="text" value="cs-1" class="cs-input text-xs" style="width:140px" />
+            <button id="hp-new-session-btn" class="btn-secondary text-xs px-3 py-1">New</button>
+            <div class="flex-1"></div>
+            <span class="font-mono text-xs text-cs-outline" id="hp-msg-count">0 messages</span>
+          </div>
+
+          <!-- Chat window -->
+          <div id="hp-chat" class="flex-1 overflow-y-auto p-4 bg-cs-bg" style="min-height:300px;max-height:380px">
+            <div class="font-mono text-xs text-cs-outline text-center py-8">
+              Type a message below to start. The AI will respond and log what it detects.
+            </div>
+          </div>
+
+          <!-- Message input -->
+          <div class="border-t border-cs-outline-v p-3 flex gap-2 bg-cs-bg">
+            <textarea
+              id="hp-message-input"
+              class="cs-input text-xs flex-1 resize-none"
+              rows="2"
+              placeholder="Type a message as if you were the scammer..."></textarea>
+            <button id="hp-send-btn" class="btn-primary text-xs px-4">Send</button>
+          </div>
+
+          <!-- Quick message examples -->
+          <div class="border-t border-cs-outline-v px-3 py-2 bg-cs-surf-low">
+            <div class="font-mono text-xs text-cs-outline uppercase tracking-widest mb-2">Try an example</div>
+            <div id="hp-quick-sends" class="flex flex-wrap gap-1">
+              <!-- Populated by JS -->
+            </div>
+          </div>
+
+          <!-- Detection result -->
+          <div class="border-t border-cs-outline-v px-3 py-3 bg-cs-bg">
+            <div class="font-mono text-xs font-semibold uppercase tracking-widest text-cs-outline mb-2">Detection Result</div>
+            <div id="hp-live-detection" class="font-mono text-xs text-cs-outline">
+              No signal yet.
+            </div>
+          </div>
+        </div>
+
+        <!-- Right: Attack Scenarios -->
+        <div class="flex flex-col" style="width:41.667%">
+          <div class="border-b border-cs-outline-v px-4 py-2 bg-cs-surf-low">
+            <div class="font-mono text-xs font-semibold uppercase tracking-wider text-cs-outline">Attack Scenarios</div>
+            <div class="font-body text-cs-secondary mt-1" style="font-size:11px">Click a scenario to replay a full scam campaign automatically</div>
+          </div>
+
+          <!-- Scenario list -->
+          <div id="hp-campaigns" class="overflow-y-auto flex-1">
+            <!-- Populated by JS -->
+          </div>
+
+          <!-- Scenario run result -->
+          <div id="hp-ingest-result" class="border-t border-cs-outline-v p-3 font-mono text-xs text-cs-secondary" style="min-height:48px">
+            <!-- Populated by JS -->
+          </div>
+        </div>
+      </div>
+
+      <!-- Alerts generated -->
+      <div class="border-t border-cs-outline-v p-5">
+        <div class="font-mono text-xs font-semibold uppercase tracking-widest text-cs-outline mb-1">Alerts Generated</div>
+        <div class="font-body text-cs-secondary mb-3" style="font-size:11px">When the system detects a threat pattern, it raises an alert here</div>
+        <div id="hp-incidents" class="font-mono text-xs text-cs-outline">
+          Send messages or run a scenario to see alerts here.
+        </div>
+      </div>
+    </section>
+
+    <!-- ===========================================================
+         VIEW: ANALYSIS  (URL scanner + Email scanner, one active at a time)
+         =========================================================== -->
+    <section id="v-analysis" class="view">
+      <!-- Page header — title updated dynamically by navigate() -->
+      <div class="border-b border-cs-outline-v px-6 py-4 bg-cs-bg">
+        <h1 id="analysis-page-title" class="page-title">Scanner</h1>
+        <p id="analysis-page-sub" class="font-body text-cs-secondary mt-1" style="font-size:13px"></p>
+        <span id="analysis-task-id" class="font-mono text-xs text-cs-outline border border-cs-outline-v px-2 py-1 mt-2 inline-block"></span>
+      </div>
+
+      <!-- Workspace -->
+      <div class="p-5">
+        <div class="border border-cs-outline-v">
+
+          <!-- URL input section -->
+          <div id="url-input-section" class="p-5">
+            <div class="section-label mb-2">Enter URL or domain to check</div>
+            <div class="flex gap-0">
+              <div class="flex items-center justify-center bg-cs-surf-low border border-cs-outline-v border-r-0" style="width:40px">
+                <span class="material-symbols-outlined text-cs-outline" style="font-size:18px">link</span>
+              </div>
+              <input
+                id="url-input"
+                type="text"
+                class="cs-input flex-1 text-sm"
+                style="border-left:none"
+                placeholder="https://example.com  or  suspicious-domain.xyz" />
+              <button id="url-analyze-btn" class="btn-primary text-xs px-6" style="border-left:none">Check Now</button>
+            </div>
+            <div class="font-body text-cs-outline mt-2" style="font-size:11px">
+              Analysis runs entirely offline — no data is sent externally. Safe for sensitive investigations.
+            </div>
+            <div id="url-samples" class="flex flex-wrap gap-2 mt-3">
+              <!-- Populated by JS -->
+            </div>
+          </div>
+
+          <!-- Email input section (hidden until Email nav is active) -->
+          <div id="email-input-section" class="p-5" style="display:none">
+            <div class="section-label mb-2">Paste the email content below</div>
+            <div class="font-body text-cs-secondary mb-2" style="font-size:11px">
+              Include the From:, To:, Subject: and Date: lines at the top — these are needed for full analysis
+            </div>
+            <div class="flex gap-0 mb-2">
+              <div class="flex items-center justify-center bg-cs-surf-low border border-cs-outline-v border-r-0" style="width:40px;align-self:stretch">
+                <span class="material-symbols-outlined text-cs-outline" style="font-size:18px">mail</span>
+              </div>
+              <textarea
+                id="email-input"
+                class="cs-input flex-1 text-xs resize-none"
+                style="border-left:none;font-family:'IBM Plex Mono',monospace"
+                rows="6"
+                placeholder="From: attacker@suspicious.com&#10;To: victim@company.com&#10;Subject: Urgent — verify your account&#10;Date: Mon, 1 Jan 2024 10:00:00 +0000&#10;&#10;Dear customer, your account has been suspended..."></textarea>
+            </div>
+            <div class="flex items-center gap-3">
+              <button id="email-analyze-btn" class="btn-primary text-xs px-6">Check Now</button>
+              <div id="email-samples" class="flex flex-wrap gap-2">
+                <!-- Populated by JS -->
+              </div>
+            </div>
+          </div>
+
+          <!-- Results panel (hidden until scan runs) -->
+          <div id="analysis-results" class="hidden">
+            <div class="border-t border-cs-outline-v flex">
+
+              <!-- Left: Risk score -->
+              <div id="score-panel" class="border-r border-cs-outline-v p-6 flex flex-col items-center justify-center" style="width:33.333%;min-height:220px">
+                <div class="font-mono text-xs text-cs-outline uppercase tracking-widest mb-2">Risk Score</div>
+                <span id="score-value" class="score-number">—</span>
+                <span id="score-label" class="font-mono text-xs text-cs-outline uppercase tracking-widest mt-2">out of 100</span>
+                <div id="score-badge" class="chip chip-neutral mt-4 text-xs">—</div>
+              </div>
+
+              <!-- Right: What we found -->
+              <div class="flex-1 p-5" style="min-width:0">
+                <div class="font-mono text-xs font-semibold uppercase tracking-widest text-cs-outline mb-3">
+                  What we found
+                </div>
+                <div id="indicators-list">
+                  <!-- Populated by JS -->
+                </div>
+              </div>
+            </div>
+
+            <!-- Verdict bar -->
+            <div id="verdict-bar" class="verdict-bar">
+              <span id="verdict-icon" class="material-symbols-outlined" style="font-size:20px">info</span>
+              <span id="verdict-text" class="font-mono text-xs font-semibold uppercase tracking-wider flex-1">—</span>
+              <button id="add-to-case-btn" class="btn-primary text-xs px-4 hidden">Save as Incident</button>
+              <span id="correlated-chip" class="correlated-chip hidden">Matches known campaign</span>
+            </div>
+          </div>
+
+          <!-- Email header breakdown (hidden until email scan) -->
+          <div id="email-details" class="hidden border-t border-cs-outline-v p-5">
+            <div class="font-mono text-xs font-semibold uppercase tracking-widest text-cs-outline mb-3">Email Header Breakdown</div>
+            <div id="email-header-grid" class="grid gap-0" style="grid-template-columns: repeat(3, 1fr)">
+              <!-- Populated by JS -->
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===========================================================
+         VIEW: OPERATIONS  (accessible via Run Demo → Incidents redirect only)
+         =========================================================== -->
+    <section id="v-operations" class="view">
+      <!-- Page header -->
+      <div class="border-b border-cs-outline-v px-6 py-4 flex items-center justify-between bg-cs-bg">
+        <div class="flex items-center gap-4">
+          <h1 class="page-title">Live Overview</h1>
+          <span id="ops-status-id" class="font-mono text-xs text-cs-outline border border-cs-outline-v px-2 py-1">LIVE</span>
+        </div>
+        <span class="font-mono text-xs text-cs-outline">Auto-refresh 5s</span>
+      </div>
+
+      <!-- Metric tiles -->
+      <div id="metric-tiles" class="flex border-b border-cs-outline-v overflow-x-auto bg-cs-bg">
+        <div class="metric-tile flex-1">
+          <div class="metric-tile-label">Loading...</div>
+          <div class="metric-tile-value">—</div>
+        </div>
+      </div>
+
+      <!-- Detection funnel + Recent Alerts -->
+      <div class="flex border-b border-cs-outline-v">
+        <div class="flex-1 border-r border-cs-outline-v p-5">
+          <div class="font-mono text-xs font-semibold uppercase tracking-widest text-cs-outline mb-1">How threats are caught</div>
+          <div class="font-body text-cs-secondary mb-3" style="font-size:11px">Each stage filters out more of the noise</div>
+          <div id="ops-funnel">
+            <div class="font-mono text-xs text-cs-outline">Loading...</div>
+          </div>
+        </div>
+        <div style="width:400px" class="p-5">
+          <div class="font-mono text-xs font-semibold uppercase tracking-widest text-cs-outline mb-3">Recent Alerts</div>
+          <div id="ops-incidents">
+            <div class="font-mono text-xs text-cs-outline">Loading...</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Recent conversations table -->
+      <div class="p-5">
+        <div class="font-mono text-xs font-semibold uppercase tracking-widest text-cs-outline mb-3">Recent Conversations</div>
+        <div class="border border-cs-outline-v">
+          <div class="flex bg-cs-surf-low border-b border-cs-outline-v">
+            <div class="font-mono text-xs font-semibold uppercase tracking-wider text-cs-outline px-3 py-2" style="width:120px">Source</div>
+            <div class="font-mono text-xs font-semibold uppercase tracking-wider text-cs-outline px-3 py-2 flex-1">Attack Type</div>
+            <div class="font-mono text-xs font-semibold uppercase tracking-wider text-cs-outline px-3 py-2" style="width:180px">ID</div>
+            <div class="font-mono text-xs font-semibold uppercase tracking-wider text-cs-outline px-3 py-2" style="width:80px">Score</div>
+            <div class="font-mono text-xs font-semibold uppercase tracking-wider text-cs-outline px-3 py-2" style="width:100px">Severity</div>
+          </div>
+          <div id="ops-sessions">
+            <div class="font-mono text-xs text-cs-outline px-3 py-4">Loading...</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===========================================================
+         VIEW: INCIDENTS
+         =========================================================== -->
+    <section id="v-incidents" class="view">
+      <!-- Page header -->
+      <div class="border-b border-cs-outline-v px-6 py-4 bg-cs-bg">
+        <h1 class="page-title">Detected Threats</h1>
+        <p class="font-body text-cs-secondary mt-1" style="font-size:13px">All confirmed threat incidents, automatically raised and categorised by severity</p>
+        <span id="incidents-count" class="font-mono text-xs text-cs-outline border border-cs-outline-v px-2 py-1 mt-2 inline-block">0 incidents</span>
+      </div>
+
+      <div class="flex" style="min-height:500px">
+        <!-- Left: filter + list -->
+        <div class="border-r border-cs-outline-v" style="width:33.333%">
+          <div class="flex border-b border-cs-outline-v">
+            <button data-filter="ALL"          class="incident-filter-btn font-mono text-xs font-semibold uppercase tracking-wider px-3 py-2 border-r border-cs-outline-v flex-1 text-cs-secondary hover:bg-cs-surf-low" style="background:none;border-top:none;border-bottom:none;border-left:none;cursor:pointer">All</button>
+            <button data-filter="ACTION_REQUIRED" class="incident-filter-btn font-mono text-xs font-semibold uppercase tracking-wider px-3 py-2 border-r border-cs-outline-v flex-1 text-cs-secondary hover:bg-cs-surf-low" style="background:none;border-top:none;border-bottom:none;border-left:none;cursor:pointer">High Priority</button>
+            <button data-filter="REVIEW"       class="incident-filter-btn font-mono text-xs font-semibold uppercase tracking-wider px-3 py-2 border-r border-cs-outline-v flex-1 text-cs-secondary hover:bg-cs-surf-low" style="background:none;border-top:none;border-bottom:none;border-left:none;cursor:pointer">Review</button>
+            <button data-filter="NOISE"        class="incident-filter-btn font-mono text-xs font-semibold uppercase tracking-wider px-3 py-2 flex-1 text-cs-secondary hover:bg-cs-surf-low" style="background:none;border-top:none;border-bottom:none;border-left:none;cursor:pointer">Low Risk</button>
+          </div>
+          <div id="incident-list" class="overflow-y-auto" style="max-height:calc(100vh - 200px)">
+            <div class="font-mono text-xs text-cs-outline px-4 py-6">No incidents yet.</div>
+          </div>
+        </div>
+
+        <!-- Right: detail -->
+        <div class="flex-1 overflow-y-auto">
+          <div id="incident-detail-header" class="border-b border-cs-outline-v px-5 py-3 bg-cs-surf-low">
+            <span class="font-mono text-xs text-cs-outline">Select a threat on the left to see full details</span>
+          </div>
+          <div id="incident-detail" class="p-5">
+            <div class="font-mono text-xs text-cs-outline">—</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===========================================================
+         VIEW: ARCHITECTURE / SETTINGS
+         =========================================================== -->
+    <section id="v-architecture" class="view">
+      <!-- Page header -->
+      <div class="border-b border-cs-outline-v px-6 py-4 bg-cs-bg">
+        <h1 class="page-title">Settings & System Info</h1>
+        <p class="font-body text-cs-secondary mt-1" style="font-size:13px">AI model configuration, system status, and administrative controls</p>
+      </div>
+
+      <div class="flex gap-0 p-5 gap-5">
+        <!-- Left: AI model chain -->
+        <div class="flex-1 border border-cs-outline-v">
+          <div class="border-b border-cs-outline-v px-4 py-2 bg-cs-surf-low">
+            <span class="font-mono text-xs font-semibold uppercase tracking-widest text-cs-outline">AI Model Chain</span>
+          </div>
+          <div id="arch-models" class="p-4 font-mono text-xs text-cs-outline">
+            Loading...
+          </div>
+        </div>
+
+        <!-- Right: status + API key -->
+        <div style="width:340px">
+          <div class="border border-cs-outline-v mb-4">
+            <div class="border-b border-cs-outline-v px-4 py-2 bg-cs-surf-low">
+              <span class="font-mono text-xs font-semibold uppercase tracking-widest text-cs-outline">System Status</span>
+            </div>
+            <div id="arch-status" class="p-4 font-mono text-xs text-cs-secondary">
+              Loading...
+            </div>
+          </div>
+
+          <!-- API key form -->
+          <div class="border border-cs-outline-v">
+            <div class="border-b border-cs-outline-v px-4 py-2 bg-cs-surf-low">
+              <span class="font-mono text-xs font-semibold uppercase tracking-widest text-cs-outline">OpenRouter API Key</span>
+            </div>
+            <div class="p-4">
+              <div class="section-label mb-2">x-api-key</div>
+              <div class="flex gap-0">
+                <input id="arch-api-key" type="password" class="cs-input flex-1 text-xs" placeholder="Leave blank if not required" />
+                <button id="arch-save-key" class="btn-primary text-xs px-4" style="border-left:none">Save</button>
+              </div>
+              <div id="arch-key-status" class="font-mono text-xs text-cs-outline mt-2"></div>
+            </div>
+          </div>
+
+          <!-- Clear sessions -->
+          <div class="border border-cs-outline-v mt-4">
+            <div class="border-b border-cs-outline-v px-4 py-2 bg-cs-surf-low">
+              <span class="font-mono text-xs font-semibold uppercase tracking-widest text-cs-outline">Reset Data</span>
+            </div>
+            <div class="p-4 flex flex-col gap-2">
+              <button id="arch-clear-sessions" class="btn-secondary text-xs w-full">Clear All Sessions & Incidents</button>
+              <div id="arch-debug-status" class="font-mono text-xs text-cs-outline"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<!-- Sentinel JS -->
+<script src="/static/sentinel.js"></script>
+</body>
+</html>

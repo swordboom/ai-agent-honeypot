@@ -29,6 +29,13 @@ class Intelligence:
     domains: set = field(default_factory=set)
     ifsc_codes: set = field(default_factory=set)
 
+    # Technical-feed identifiers. These remain separate from financial account
+    # numbers: a login username must never correlate with a mule bank account.
+    ip_addresses: set = field(default_factory=set)
+    usernames: set = field(default_factory=set)
+    file_hashes: set = field(default_factory=set)
+    endpoints: set = field(default_factory=set)
+
     def has_actionable(self) -> bool:
         return any([self.bank_accounts, self.upi_ids, self.phishing_links, self.phone_numbers])
 
@@ -58,6 +65,10 @@ class Intelligence:
             "policyNumbers": sorted(self.policy_numbers),
             "orderNumbers": sorted(self.order_numbers),
             "suspiciousKeywords": sorted(self.suspicious_keywords),
+            "ipAddresses": sorted(self.ip_addresses),
+            "usernames": sorted(self.usernames),
+            "fileHashes": sorted(self.file_hashes),
+            "endpoints": sorted(self.endpoints),
         }
 
     def to_extended_payload(self) -> Dict[str, List[str]]:
@@ -101,6 +112,18 @@ class SessionState:
     session_id: str
     persona_id: str
     persona_label: str
+
+    # A SessionState is the accumulated case record for either input source.
+    # Defaults preserve the existing conversational path unchanged.
+    source_type: str = "honeypot"
+    event_type: str = ""
+    source_identifier: str = ""
+
+    # How much this track actually represents. A honeypot track is one message aimed
+    # at one victim; one technical event can be 50 login attempts against 12 accounts.
+    # Severity must follow the attack, not how the feed chose to batch it.
+    event_count: int = 1
+    affected_targets: int = 1
 
     scam_detected: bool = False
     scam_confidence: float = 0.0

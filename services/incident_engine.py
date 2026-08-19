@@ -14,7 +14,9 @@ This module does exactly that:
 Incidents are derived on read from live session state rather than persisted. The
 session store is already the source of truth and is in-memory anyway, so a second
 store would only add a way for the two to disagree.
-ponytail: recompute per request; add a store when session count makes it slow.
+ponytail: recompute per request, no cache. Measured on this machine, one call is
+0.4ms at 30 sessions, 9ms at 1000, 28ms at 3000; a dashboard poll triggers ~4 of them
+against a 5s interval. Add memoisation only if those numbers stop holding.
 """
 
 import hashlib
@@ -51,11 +53,19 @@ ATTACK_TYPE_WEIGHTS: Dict[str, int] = {
     "DIGITAL_ARREST": 30,
     "UPI_FRAUD": 27,
     "BANK_FRAUD": 25,
+    "CRYPTO_SCAM": 24,
     "KYC_FRAUD": 22,
     "PHISHING": 20,
+    "PHISHING_EMAIL": 22,   # email is the #1 delivery vector; spoofing + SPF fail = serious
+    "SUSPICIOUS_EMAIL": 16,
+    "SUSPICIOUS_URL": 16,
     "REFUND_SCAM": 14,
     "LOTTERY_SCAM": 12,
     "GENERIC_SCAM": 8,
+    "CREDENTIAL_STUFFING": 28,
+    "BRUTE_FORCE": 26,
+    "WEB_ATTACK": 24,
+    "PORT_SCAN": 12,
     "UNKNOWN": 6,
 }
 
@@ -63,11 +73,19 @@ CATEGORY_LABELS: Dict[str, str] = {
     "DIGITAL_ARREST": "Digital arrest",
     "UPI_FRAUD": "UPI payment fraud",
     "BANK_FRAUD": "Bank impersonation",
+    "CRYPTO_SCAM": "Crypto investment fraud",
     "KYC_FRAUD": "KYC update fraud",
     "PHISHING": "Phishing",
+    "PHISHING_EMAIL": "Email phishing",
+    "SUSPICIOUS_EMAIL": "Suspicious email",
+    "SUSPICIOUS_URL": "Suspicious URL / domain",
     "REFUND_SCAM": "Refund lure",
     "LOTTERY_SCAM": "Lottery / prize lure",
     "GENERIC_SCAM": "Generic scam",
+    "CREDENTIAL_STUFFING": "Credential stuffing",
+    "BRUTE_FORCE": "Brute-force attack",
+    "WEB_ATTACK": "Web / API attack",
+    "PORT_SCAN": "Port scan",
     "UNKNOWN": "Unclassified",
 }
 
@@ -133,6 +151,34 @@ _INDICATOR_PLAYBOOK: Dict[str, Dict[str, object]] = {
         "sla_minutes": 240,
         "rationale": "Add to the tenant block list and sweep mailboxes for prior contact.",
     },
+    "ip": {
+        "action": "BLOCK_SOURCE_IP",
+        "owner": "Network security",
+        "priority": 1,
+        "sla_minutes": 15,
+        "rationale": "Block the source at the edge and preserve its authentication activity for investigation.",
+    },
+    "user": {
+        "action": "LOCK_ACCOUNT_AND_FORCE_RESET",
+        "owner": "IAM / identity",
+        "priority": 1,
+        "sla_minutes": 30,
+        "rationale": "Account was targeted by an authentication attack; lock it and require a credential reset.",
+    },
+    "hash": {
+        "action": "QUARANTINE_FILE_HASH",
+        "owner": "Endpoint security",
+        "priority": 2,
+        "sla_minutes": 60,
+        "rationale": "Quarantine matching files and hunt endpoints for the captured hash.",
+    },
+    "endpoint": {
+        "action": "INVESTIGATE_TARGET_ENDPOINT",
+        "owner": "Application security",
+        "priority": 2,
+        "sla_minutes": 60,
+        "rationale": "Review access and authentication logs for the targeted endpoint.",
+    },
 }
 
 _DOMAIN_RE = re.compile(r"(?i)^(?:https?://)?(?:www\.)?([a-z0-9.\-]+)")
@@ -176,6 +222,7 @@ class Incident:
     recommended_action: str
     response_plan: List[ResponseAction] = field(default_factory=list)
     triage: str = "ACTION_REQUIRED"
+    source_type: str = "Honeypot"
     declared_at: float = field(default_factory=time.time)
 
 
@@ -219,7 +266,12 @@ def _session_indicators(state) -> List[str]:
     indicators.extend(f"account:{v}" for v in intel.bank_accounts)
     indicators.extend(f"wallet:{v.lower()}" for v in intel.crypto_wallets)
     indicators.extend(f"domain:{_link_domain(v)}" for v in intel.phishing_links if v)
+    indicators.extend(f"domain:{_link_domain(v)}" for v in intel.domains if v)
     indicators.extend(f"email:{v.lower()}" for v in intel.emails)
+    indicators.extend(f"ip:{v.lower()}" for v in intel.ip_addresses)
+    indicators.extend(f"user:{v.lower()}" for v in intel.usernames)
+    indicators.extend(f"hash:{v.lower()}" for v in intel.file_hashes)
+    indicators.extend(f"endpoint:{v.lower()}" for v in intel.endpoints)
     return [i for i in indicators if len(i.split(":", 1)[1]) >= 4]
 
 
@@ -257,8 +309,8 @@ def _severity_from_score(score: float) -> str:
 
 def _score(
     category: str,
-    session_count: int,
-    sessions_per_minute: float,
+    affected_entities: int,
+    events_per_minute: float,
     distinct_indicators: int,
     max_confidence: float,
 ) -> Tuple[float, Dict[str, float]]:
@@ -269,8 +321,8 @@ def _score(
     triage feedback; a model only earns its keep once there is labelled data.
     """
     attack_type = float(ATTACK_TYPE_WEIGHTS.get(category, ATTACK_TYPE_WEIGHTS["UNKNOWN"]))
-    breadth = min(25.0, 5.0 * (session_count - 1))
-    velocity = min(20.0, 5.0 * sessions_per_minute)
+    breadth = min(25.0, 5.0 * (affected_entities - 1))
+    velocity = min(20.0, 5.0 * events_per_minute)
     intel_value = min(15.0, 3.0 * distinct_indicators)
     confidence = 10.0 * max(0.0, min(1.0, max_confidence))
 
@@ -286,7 +338,7 @@ def _score(
 
 # Name the incident after the most actionable identifier available: a UPI handle
 # can be reported and frozen, a caller ID mostly cannot.
-_NAMING_PRIORITY = ("upi", "wallet", "account", "domain", "email", "phone")
+_NAMING_PRIORITY = ("upi", "wallet", "account", "domain", "ip", "email", "phone", "user", "hash", "endpoint")
 
 
 def _headline_indicator(indicators: List[str]) -> Optional[str]:
@@ -295,6 +347,28 @@ def _headline_indicator(indicators: List[str]) -> Optional[str]:
             if indicator.startswith(f"{kind}:"):
                 return indicator.split(":", 1)[1]
     return None
+
+
+# Above this many targets of one kind, the plan names a count instead of a row each.
+_MAX_TARGETS_PER_KIND = 3
+
+_BULK_NOUNS = {
+    "ip": "source IPs",
+    "user": "accounts",
+    "hash": "file hashes",
+    "endpoint": "endpoints",
+    "phone": "numbers",
+    "email": "addresses",
+    "domain": "domains",
+    "upi": "UPI handles",
+    "account": "bank accounts",
+    "wallet": "wallets",
+}
+
+
+def _bulk_target(kind: str, targets: List[str]) -> str:
+    shown = ", ".join(targets[:_MAX_TARGETS_PER_KIND])
+    return f"{len(targets)} {_BULK_NOUNS.get(kind, kind)} ({shown} +{len(targets) - _MAX_TARGETS_PER_KIND} more)"
 
 
 def build_response_plan(
@@ -314,21 +388,37 @@ def build_response_plan(
     scale = _SLA_BY_SEVERITY[severity]
     actions: List[ResponseAction] = []
 
+    # Group by kind first. A scam session yields one or two payment handles, but a
+    # credential attack yields dozens of usernames and a spray yields dozens of IPs -
+    # naming each one separately turns a response plan into the alert queue this
+    # system exists to collapse.
+    by_kind: Dict[str, List[str]] = {}
     for indicator in indicators:
         kind, _, target = indicator.partition(":")
-        rule = _INDICATOR_PLAYBOOK.get(kind)
-        if not rule or not target:
-            continue
-        actions.append(
-            ResponseAction(
-                action=str(rule["action"]),
-                target=target,
-                owner=str(rule["owner"]),
-                priority=int(rule["priority"]),
-                sla_minutes=max(15, int(round(float(rule["sla_minutes"]) * scale))),
-                rationale=str(rule["rationale"]),
-            )
+        if target and kind in _INDICATOR_PLAYBOOK:
+            by_kind.setdefault(kind, []).append(target)
+
+    for kind, targets in by_kind.items():
+        rule = _INDICATOR_PLAYBOOK[kind]
+        sla = max(15, int(round(float(rule["sla_minutes"]) * scale)))
+        # Few targets stay individually actionable; many collapse into one bulk
+        # action that still names the first few, so the plan stays readable.
+        chunks = (
+            [[t] for t in targets]
+            if len(targets) <= _MAX_TARGETS_PER_KIND
+            else [targets]
         )
+        for chunk in chunks:
+            actions.append(
+                ResponseAction(
+                    action=str(rule["action"]),
+                    target=chunk[0] if len(chunk) == 1 else _bulk_target(kind, chunk),
+                    owner=str(rule["owner"]),
+                    priority=int(rule["priority"]),
+                    sla_minutes=sla,
+                    rationale=str(rule["rationale"]),
+                )
+            )
 
     # Campaign-level actions that follow from the shape of the incident, not from any
     # single indicator.
@@ -411,6 +501,14 @@ def _build_incident(cluster: Sequence, now: float) -> Incident:
     window_minutes = max(1.0, duration / 60.0)
     sessions_per_minute = round(len(cluster) / window_minutes, 2)
 
+    # One technical event can carry 50 attempts against 12 accounts, so severity reads
+    # the magnitudes the feed reported rather than counting rows. A honeypot track is
+    # 1 observation against 1 victim, which makes both of these identical to the old
+    # session-count maths and leaves existing scores untouched.
+    observations = sum(getattr(s, "event_count", 1) for s in cluster)
+    affected_entities = max(len(cluster), sum(getattr(s, "affected_targets", 1) for s in cluster))
+    events_per_minute = round(observations / window_minutes, 2)
+
     indicators = sorted({i for s in cluster for i in _session_indicators(s)})
     languages = sorted({s.language for s in cluster if s.language and s.language != "unknown"})
     category = _dominant_category(cluster)
@@ -418,16 +516,19 @@ def _build_incident(cluster: Sequence, now: float) -> Incident:
 
     score, breakdown = _score(
         category=category,
-        session_count=len(cluster),
-        sessions_per_minute=sessions_per_minute,
+        affected_entities=affected_entities,
+        events_per_minute=events_per_minute,
         distinct_indicators=len(indicators),
         max_confidence=max_confidence,
     )
     severity = _severity_from_score(score)
+    source_types = {getattr(s, "source_type", "honeypot") for s in cluster}
+    source_type = "Mixed" if len(source_types) > 1 else ("Technical" if "technical" in source_types else "Honeypot")
 
     return Incident(
         response_plan=build_response_plan(severity, category, indicators, len(cluster), languages),
         triage=TRIAGE_BY_SEVERITY[severity],
+        source_type=source_type,
         incident_id=incident_id,
         name=_incident_name(category, indicators, len(cluster), incident_id),
         severity=severity,
@@ -554,6 +655,17 @@ def _self_check() -> None:
     assert len(merged) == 1, merged
     assert merged[0].session_ids == ["a", "b", "c"]
 
+    # A track that stands for many observations against many targets scores on those
+    # magnitudes, not on how many rows the feed sent.
+    bulk = make("bulk", "BRUTE_FORCE", upi="x@ybl")
+    bulk.event_count, bulk.affected_targets = 50, 12
+    bulk_incident = declare_incidents([bulk], now=1200.0)[0]
+    lone = declare_incidents([make("lone", "BRUTE_FORCE", upi="y@ybl")], now=1200.0)[0]
+    assert bulk_incident.score_breakdown["breadth"] > lone.score_breakdown["breadth"], bulk_incident
+    assert bulk_incident.score_breakdown["velocity"] > lone.score_breakdown["velocity"], bulk_incident
+    # Defaults keep a plain honeypot session on exactly the old session-count maths.
+    assert lone.score_breakdown["breadth"] == 0.0, lone.score_breakdown
+
     # Severity labels track the score bands.
     assert _severity_from_score(80) == SEVERITY_CRITICAL
     assert _severity_from_score(60) == SEVERITY_HIGH
@@ -603,6 +715,18 @@ def _self_check() -> None:
     # A session with no indicators still gets told what to do next.
     bare = build_response_plan(SEVERITY_LOW, "GENERIC_SCAM", [], 1, ["en"])
     assert [a.action for a in bare] == ["CONTINUE_ENGAGEMENT"], bare
+
+    # Many targets of one kind collapse into a single counted action instead of
+    # one row per target.
+    many = build_response_plan(
+        SEVERITY_HIGH, "CREDENTIAL_STUFFING", [f"user:acct{i}" for i in range(14)], 1, ["en"]
+    )
+    locks = [a for a in many if a.action == "LOCK_ACCOUNT_AND_FORCE_RESET"]
+    assert len(locks) == 1, locks
+    assert locks[0].target.startswith("14 accounts ("), locks[0].target
+    # Few targets are still named individually.
+    few = build_response_plan(SEVERITY_HIGH, "BRUTE_FORCE", ["ip:203.0.113.9", "ip:203.0.113.8"], 1, ["en"])
+    assert sorted(a.target for a in few if a.action == "BLOCK_SOURCE_IP") == ["203.0.113.8", "203.0.113.9"], few
 
     # --- triage funnel ------------------------------------------------------
     assert campaign.triage == TRIAGE_BY_SEVERITY[campaign.severity]

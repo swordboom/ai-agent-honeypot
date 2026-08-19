@@ -17,6 +17,8 @@ class DashboardIntelCounts(BaseModel):
     emails: int = 0
     cryptoWallets: int = 0
     domains: int = 0
+    ipAddresses: int = 0
+    usernames: int = 0
 
 
 class DashboardCountEntry(BaseModel):
@@ -54,6 +56,7 @@ class DashboardSummary(BaseModel):
 class DashboardSessionCard(BaseModel):
     sessionId: str
     persona: str
+    sourceType: str = "honeypot"
     scamDetected: bool
     scamCategory: str
     scamConfidence: float
@@ -81,6 +84,7 @@ class DashboardSessionDetail(BaseModel):
     sessionId: str
     personaId: str
     persona: str
+    sourceType: str = "honeypot"
     scamDetected: bool
     scamCategory: str
     scamConfidence: float
@@ -112,6 +116,7 @@ class DashboardIncident(BaseModel):
     name: str
     severity: str
     severityScore: float
+    sourceType: str = "Honeypot"
     scamCategory: str
     sessionIds: List[str]
     sessionCount: int

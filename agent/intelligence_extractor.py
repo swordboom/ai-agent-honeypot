@@ -46,14 +46,33 @@ SUSPICIOUS_TLDS = {
 
 
 def _normalize_phone(raw: str) -> str:
+    """
+    Phone or account number? Both are long digit runs, and getting it wrong sends the
+    telecom desk after a bank account while the mule account goes unfrozen.
+
+    The signal is formatting: a human writes a phone with a + or separators, and an
+    unformatted run is a phone only in the shapes a real number actually takes.
+    """
     digits = re.sub(r"\D", "", raw)
-    if digits.startswith("91") and len(digits) == 12:
-        return "+" + digits
-    if len(digits) == 10:
+    formatted = bool(re.search(r"[+\-\s]", raw.strip()))
+
+    if formatted and 10 <= len(digits) <= 15:
+        return "+" + digits if raw.strip().startswith("+") else _with_country_code(digits)
+
+    # Bare digit run: only the real phone shapes qualify. Anything else is an account.
+    if len(digits) == 10 and digits[0] in "6789":
         return "+91" + digits
-    if 10 <= len(digits) <= 15:
+    if len(digits) == 11 and digits.startswith("0") and digits[1] in "6789":
+        return "+91" + digits[1:]
+    if len(digits) == 12 and digits.startswith("91"):
         return "+" + digits
     return raw
+
+
+def _with_country_code(digits: str) -> str:
+    if len(digits) == 10:
+        return "+91" + digits
+    return "+" + digits
 
 
 def _url_to_domain(url: str) -> Optional[str]:
@@ -109,7 +128,7 @@ def extract_intelligence(texts: Iterable[str], intel: Intelligence) -> None:
         intel.ifsc_codes.add(match)
 
     for match in REFERENCE_ID_PATTERN.findall(combined):
-        if match and len(match) >= 6:
+        if match and len(match) >= 6 and not IFSC_PATTERN.fullmatch(match):
             intel.reference_ids.add(match.upper())
             intel.case_ids.add(match.upper())
 

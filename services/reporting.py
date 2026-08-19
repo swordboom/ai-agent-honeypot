@@ -18,7 +18,7 @@ from agent.multilingual import LANGUAGE_NAMES
 from models.session import SessionState
 from services.incident_engine import Incident, declare_incidents, triage_funnel
 
-SCHEMA_VERSION = "honeypot-report/1.0"
+SCHEMA_VERSION = "honeypot-report/1.1"
 
 
 def engagement_duration_seconds(state: SessionState, now: Optional[float] = None) -> int:
@@ -45,6 +45,7 @@ def incident_report(incident: Incident) -> Dict[str, object]:
         "name": incident.name,
         "severity": incident.severity,
         "severityScore": incident.severity_score,
+        "sourceType": incident.source_type,
         "triage": incident.triage,
         "scamCategory": incident.scam_category,
         "sessionIds": incident.session_ids,
@@ -69,6 +70,7 @@ def session_report(state: SessionState, incident: Optional[Incident] = None) -> 
         "schemaVersion": SCHEMA_VERSION,
         "generatedAt": int(time.time()),
         "sessionId": state.session_id,
+        "sourceType": state.source_type,
         "status": "closed" if state.finalized else "active",
         "detection": {
             "scamDetected": state.scam_detected,
@@ -87,7 +89,10 @@ def session_report(state: SessionState, incident: Optional[Incident] = None) -> 
             "observed": [LANGUAGE_NAMES.get(c, c) for c in state.languages_seen],
             "vernacularScore": state.vernacular_score,
         },
-        "engagement": {
+        "engagement": (
+            None
+            if state.source_type == "technical"
+            else {
             "persona": state.persona_label,
             "personaId": state.persona_id,
             "agentTurns": state.agent_turns,
@@ -95,7 +100,8 @@ def session_report(state: SessionState, incident: Optional[Incident] = None) -> 
             "totalMessages": total_messages,
             "durationSeconds": engagement_duration_seconds(state),
             "replyProvider": state.reply_provider,
-        },
+            }
+        ),
         "indicators": state.intel.to_indicator_payload(),
         "extendedIndicators": state.intel.to_extended_payload(),
         "incident": (
@@ -104,6 +110,7 @@ def session_report(state: SessionState, incident: Optional[Incident] = None) -> 
                 "name": incident.name,
                 "severity": incident.severity,
                 "severityScore": incident.severity_score,
+                "sourceType": incident.source_type,
                 "triage": incident.triage,
                 "responsePlan": [action_payload(a) for a in incident.response_plan],
             }

@@ -71,6 +71,8 @@ def _intel_counts(intel) -> DashboardIntelCounts:
         emails=len(intel.emails),
         cryptoWallets=len(intel.crypto_wallets),
         domains=len(intel.domains),
+        ipAddresses=len(intel.ip_addresses),
+        usernames=len(intel.usernames),
     )
 
 
@@ -87,6 +89,7 @@ def _incident_model(incident: Incident) -> DashboardIncident:
         name=incident.name,
         severity=incident.severity,
         severityScore=incident.severity_score,
+        sourceType=incident.source_type,
         scamCategory=incident.scam_category,
         sessionIds=incident.session_ids,
         sessionCount=incident.session_count,
@@ -141,6 +144,7 @@ class DashboardService:
         all_bank, all_upi, all_links, all_phones = set(), set(), set(), set()
         all_case_ids, all_policy_numbers, all_order_numbers, all_ref = set(), set(), set(), set()
         all_amounts, all_emails, all_crypto, all_domains = set(), set(), set(), set()
+        all_ips, all_usernames = set(), set()
 
         for state in sessions:
             if state.scam_detected and not state.finalized:
@@ -175,6 +179,8 @@ class DashboardService:
             all_emails.update(state.intel.emails)
             all_crypto.update(state.intel.crypto_wallets)
             all_domains.update(state.intel.domains)
+            all_ips.update(state.intel.ip_addresses)
+            all_usernames.update(state.intel.usernames)
 
         incidents = declare_incidents(sessions, now=now_ts)
         counts = severity_counts(incidents)
@@ -209,6 +215,8 @@ class DashboardService:
                 emails=len(all_emails),
                 cryptoWallets=len(all_crypto),
                 domains=len(all_domains),
+                ipAddresses=len(all_ips),
+                usernames=len(all_usernames),
             ),
         )
 
@@ -259,6 +267,7 @@ class DashboardService:
                 DashboardSessionCard(
                     sessionId=state.session_id,
                     persona=state.persona_label,
+                    sourceType=state.source_type,
                     scamDetected=state.scam_detected,
                     scamCategory=state.scam_category,
                     scamConfidence=state.scam_confidence,
@@ -288,6 +297,7 @@ class DashboardService:
             sessionId=state.session_id,
             personaId=state.persona_id,
             persona=state.persona_label,
+            sourceType=state.source_type,
             scamDetected=state.scam_detected,
             scamCategory=state.scam_category,
             scamConfidence=state.scam_confidence,

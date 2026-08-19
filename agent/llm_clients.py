@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 import threading
 import time
 from dataclasses import dataclass, field
@@ -15,15 +16,19 @@ OPENROUTER_BASE = "https://openrouter.ai/api/v1"
 # short multilingual roleplay + JSON extraction. Embedding / rerank / content-safety
 # entries from that list are intentionally excluded: they cannot do chat completion.
 DEFAULT_FREE_MODELS: Tuple[str, ...] = (
-    "z-ai/glm-5.2:free",
-    "nvidia/nemotron-3-super:free",
-    "google/gemma-4-31b:free",
-    "nvidia/nemotron-3-nano-30b-a3b:free",
-    "google/gemma-4-26b-a4b:free",
-    "poolside/laguna-xs-2.1:free",
-    "nvidia/nemotron-nano-9b-v2:free",
-    "cohere/north-mini-code:free",
+    # Ordered by measured behaviour on real scam prompts, not by listing order: the
+    # instruct-tuned models answer in character, the reasoning models below them lose
+    # the whole budget to chain-of-thought and get rejected by sanitize_reply, so they
+    # sit at the tail as availability backstops only.
+    "nvidia/nemotron-3-ultra-550b-a55b:free",
+    "nvidia/nemotron-3-super-120b-a12b:free",
+    "google/gemma-4-31b-it:free",
+    "google/gemma-4-26b-a4b-it:free",
     "openai/gpt-oss-20b:free",
+    "z-ai/glm-5.2:free",
+    "nvidia/nemotron-3.5-lightning:free",
+    "nvidia/nemotron-nano-9b-v2:free",
+    "nvidia/nemotron-3-nano-30b-a3b:free",
 )
 
 
@@ -42,9 +47,16 @@ class _ModelHealth:
         self._dead: set = set()
         self._last_ok: Optional[str] = None
         self._lock = threading.Lock()
+        self._chain_blocked_until = 0.0
 
     def usable(self, models: List[str]) -> List[str]:
         now = time.time()
+        with self._lock:
+            # The free tier caps requests per DAY per account, not per model. Once
+            # that trips, every slug returns 429 and walking the chain costs nine
+            # round-trips per reply for nothing.
+            if now < self._chain_blocked_until:
+                return []
         with self._lock:
             live = [m for m in models if m not in self._dead and self._benched.get(m, 0.0) < now]
             # Stick to the last model that worked: fewer cold-start failures per request.
@@ -52,6 +64,11 @@ class _ModelHealth:
                 live.remove(self._last_ok)
                 live.insert(0, self._last_ok)
             return live
+
+    def block_chain(self, seconds: float) -> None:
+        """Account-level quota exhausted: stop trying every model until it resets."""
+        with self._lock:
+            self._chain_blocked_until = max(self._chain_blocked_until, time.time() + max(60.0, seconds))
 
     def mark_ok(self, model: str) -> None:
         with self._lock:
@@ -72,6 +89,7 @@ class _ModelHealth:
                 "lastWorkingModel": self._last_ok,
                 "retiredModels": sorted(self._dead),
                 "cooldownModels": sorted(m for m, until in self._benched.items() if until > now),
+                "chainBlockedSeconds": max(0, int(self._chain_blocked_until - now)),
             }
 
 
@@ -82,13 +100,37 @@ def model_health_snapshot() -> Dict[str, object]:
     return _health.snapshot()
 
 
+# Reasoning models spend the whole reply budget on chain-of-thought and never reach
+# the answer, so the "reply" arrives as third-person commentary about writing a reply.
+# Sending that to a scammer blows the persona harder than "as an AI" would. None of
+# these phrases occur in a real victim's message, so rejecting them is safe: the
+# caller falls back to the deterministic per-language reply.
+_META_NARRATION = (
+    "the user wants",
+    "the user says",
+    "the user is",
+    "respond as",
+    "reply as",
+    "stay in role",
+    "in character",
+    "scam victim",
+    "the assistant",
+    "system prompt",
+)
+
+_BLOCKED_MARKERS = ("as an ai", "language model", "honeypot", "bot")
+
+_THINK_RE = re.compile(r"(?is)<think>.*?</think>")
+
+
 def sanitize_reply(text: Optional[str], max_chars: int = 240) -> str:
     if not text:
         return ""
-    cleaned = " ".join(text.replace("\n", " ").strip().split())
+    cleaned = " ".join(_THINK_RE.sub(" ", text).replace("\n", " ").strip().split())
     lower = cleaned.lower()
-    blocked_markers = ["as an ai", "language model", "honeypot", "bot"]
-    if any(marker in lower for marker in blocked_markers):
+    if any(marker in lower for marker in _BLOCKED_MARKERS):
+        return ""
+    if any(marker in lower for marker in _META_NARRATION):
         return ""
     return cleaned[:max_chars]
 
@@ -105,6 +147,16 @@ def extract_json_object(text: str) -> Optional[Dict]:
         return json.loads(snippet)
     except Exception:
         return None
+
+
+def _reset_seconds(resp, default: float = 900.0) -> float:
+    """Seconds until the account quota resets, from OpenRouter's header if present."""
+    raw = resp.headers.get("X-RateLimit-Reset") if hasattr(resp, "headers") else None
+    try:
+        # Epoch milliseconds.
+        return max(60.0, (float(raw) / 1000.0) - time.time())
+    except (TypeError, ValueError):
+        return default
 
 
 @dataclass(frozen=True)
@@ -164,6 +216,10 @@ class OpenRouterClient:
 
             if resp.status_code >= 400:
                 logger.warning("OpenRouter model=%s status=%s body=%s", model, resp.status_code, resp.text[:200])
+                if resp.status_code == 429 and "per-day" in resp.text:
+                    _health.block_chain(_reset_seconds(resp))
+                    _health.mark_failed(model, resp.status_code)
+                    return None
                 _health.mark_failed(model, resp.status_code)
                 continue
 

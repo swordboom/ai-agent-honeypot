@@ -1,6 +1,6 @@
 import threading
 import time
-from typing import Dict, Iterable, List, Optional
+from typing import Dict, Iterable, List, Optional, Sequence
 
 from models.api import Message
 from models.session import SessionState, TranscriptMessage
@@ -51,6 +51,16 @@ class SessionManager:
     def list_sessions(self) -> List[SessionState]:
         with self._lock:
             return list(self._sessions.values())
+
+    def bulk_load(self, states: Sequence[SessionState]) -> int:
+        """Insert pre-built states (e.g. from a snapshot). Skips sessions that already exist."""
+        loaded = 0
+        with self._lock:
+            for state in states:
+                if state.session_id not in self._sessions:
+                    self._sessions[state.session_id] = state
+                    loaded += 1
+        return loaded
 
     def seed_history_if_needed(self, state: SessionState, history: Iterable[Message]) -> None:
         with self._lock:
@@ -202,6 +212,20 @@ class SessionManager:
             state.closed = True
             if total_messages is not None and state.final_total_messages_exchanged is None:
                 state.final_total_messages_exchanged = int(total_messages)
+            state.updated_at = time.time()
+
+    def finalize_technical(self, state: SessionState, timestamp: float) -> None:
+        """Close a non-conversational track at the feed's event time."""
+        with self._lock:
+            if state.scam_detected:
+                state.first_scam_timestamp = timestamp
+            state.finalized = True
+            state.closed = True
+            state.finalized_timestamp = timestamp
+            state.final_total_messages_exchanged = 0
+            # updated_at drives TTL expiry and UI ordering, so it stays on the wall
+            # clock. Feed time lives in created_at/first_scam/finalized_timestamp,
+            # which is what correlation and velocity actually read.
             state.updated_at = time.time()
 
     def update_llm_extraction_time(self, state: SessionState) -> None:

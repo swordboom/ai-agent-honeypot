@@ -1,7 +1,8 @@
 import logging
 import os
+import threading
 import time
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 
 from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.responses import FileResponse
@@ -23,6 +24,7 @@ from agent.scam_detector import ScamDetector
 from agent.structured_extractor import extract_structured_intelligence, should_run_llm_extraction
 from config import Settings
 from models.api import MessageEvent
+from models.technical import TechnicalEvent
 from models.dashboard import (
     DashboardIncident,
     DashboardMapPoint,
@@ -36,11 +38,19 @@ from services.reporting import incident_index, session_report, threat_report
 from services.engagement_policy import should_finalize
 from services.llm_load_control import LLMCallGate
 from services.session_manager import SessionManager
+from services.soc import soc_overview, soc_case
+from services.behavioral_analytics import analyze_entities
+from services.threat_intel import enrich_indicator
 from services.strategy_state import infer_strategy_state
+from services.technical_ingest import ingest as ingest_technical_event
+from services.url_scanner import ingest_url_scan
+from services.email_scanner import ingest_email_scan
+from services.persistence import load_snapshot, save_snapshot
 
 APP_NAME = "Agentic Honey-Pot"
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(APP_DIR, "static")
+SNAPSHOT_PATH = os.path.join(APP_DIR, "sessions_snapshot.json")
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(APP_NAME)
@@ -84,15 +94,50 @@ app = FastAPI(title=APP_NAME)
 if os.path.isdir(STATIC_DIR):
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
+# ---------- persistence ----------
+
+_snapshot_stop = threading.Event()
+
+
+def _snapshot_loop() -> None:
+    """Background thread: saves a session snapshot every 60 seconds."""
+    while not _snapshot_stop.wait(60):
+        save_snapshot(session_manager, SNAPSHOT_PATH, raw_event_count())
+
+
+@app.on_event("startup")
+async def _on_startup() -> None:
+    sessions_loaded, prior_event_count = load_snapshot(session_manager, SNAPSHOT_PATH)
+    if prior_event_count:
+        _event_counter["count"] = prior_event_count
+    if sessions_loaded:
+        logger.info("History restored: %d sessions, %d prior events", sessions_loaded, prior_event_count)
+    t = threading.Thread(target=_snapshot_loop, daemon=True, name="snapshot-saver")
+    t.start()
+
+
+@app.on_event("shutdown")
+async def _on_shutdown() -> None:
+    _snapshot_stop.set()
+    save_snapshot(session_manager, SNAPSHOT_PATH, raw_event_count())
+
 
 class DebugTextRequest(BaseModel):
     text: str
 
 
+class URLScanRequest(BaseModel):
+    url: str
+
+
+class EmailScanRequest(BaseModel):
+    rawEmail: str
+
+
 class IngestBatch(BaseModel):
     """A batch of raw events from an upstream feed."""
 
-    events: List[MessageEvent]
+    events: List[Union[MessageEvent, TechnicalEvent]]
 
 
 # Raw events seen since start. The triage funnel is only meaningful against the
@@ -215,12 +260,15 @@ def _static_page(filename: str, label: str) -> FileResponse:
     file_path = os.path.join(STATIC_DIR, filename)
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail=f"{label} not found")
-    return FileResponse(file_path)
+    # These tiny shell pages intentionally stay fresh: each points at a
+    # versioned dashboard/console script and must not leave an old renderer
+    # running after a reload during local development.
+    return FileResponse(file_path, headers={"Cache-Control": "no-store, max-age=0"})
 
 
 @app.get("/")
 async def index() -> FileResponse:
-    return _static_page("dashboard.html", "Dashboard UI")
+    return _static_page("sentinel.html", "Cyber Sentinel UI")
 
 
 @app.get("/dashboard")
@@ -232,6 +280,18 @@ async def dashboard_page() -> FileResponse:
 async def console_page() -> FileResponse:
     """Operator console: feed events in and watch correlation happen live."""
     return _static_page("console.html", "Console UI")
+
+
+@app.get("/sentinel")
+async def sentinel_page() -> FileResponse:
+    """Cyber Sentinel — redesigned threat operations interface."""
+    return _static_page("sentinel.html", "Cyber Sentinel UI")
+
+
+@app.get("/soc")
+async def soc_page() -> FileResponse:
+    """SOC console: case queue, automated investigations, and UEBA entity risk."""
+    return _static_page("soc.html", "SOC Console UI")
 
 
 # Dashboard APIs are read-only telemetry over an in-memory store and carry no
@@ -285,6 +345,45 @@ async def dashboard_models():
     }
 
 
+# ---------- SOC console (read-only telemetry, open like the dashboard) ----------
+
+
+class EnrichRequest(BaseModel):
+    kind: str
+    value: str
+
+
+@app.get("/dashboard/api/soc/overview")
+async def soc_overview_endpoint():
+    """Full SOC posture: KPIs, case queue, UEBA entity risk, triage funnel."""
+    _auto_finalize_inactive_sessions()
+    return soc_overview(session_manager.list_sessions(), raw_events=raw_event_count())
+
+
+@app.get("/dashboard/api/soc/case/{incident_id}")
+async def soc_case_endpoint(incident_id: str):
+    """One case file: incident + automated investigation + response plan."""
+    _auto_finalize_inactive_sessions()
+    case = soc_case(incident_id, session_manager.list_sessions())
+    if case is None:
+        raise HTTPException(status_code=404, detail="Case not found")
+    return case
+
+
+@app.get("/dashboard/api/soc/entities")
+async def soc_entities_endpoint(limit: int = Query(default=50, ge=1, le=200)):
+    """Ranked behavioural-analytics (UEBA) entity profiles."""
+    _auto_finalize_inactive_sessions()
+    profiles = analyze_entities(session_manager.list_sessions())
+    return [p.to_payload() for p in profiles[:limit]]
+
+
+@app.post("/dashboard/api/soc/enrich")
+async def soc_enrich_endpoint(req: EnrichRequest):
+    """Ad-hoc offline threat-intel enrichment for a single indicator."""
+    return enrich_indicator(req.kind, req.value).to_payload()
+
+
 # Debug endpoints
 @app.post("/dashboard/api/debug/detect-scam")
 async def debug_detect_scam(req: DebugTextRequest):
@@ -326,6 +425,40 @@ async def debug_llm_gate():
 async def debug_clear_sessions():
     cleared = session_manager.clear()
     return {"status": "success", "cleared": cleared}
+
+
+@app.post("/api/scan/url")
+async def scan_url_endpoint(req: URLScanRequest, x_api_key: Optional[str] = Header(None)):
+    """Analyse a URL for phishing infrastructure signals and feed it into the correlator."""
+    _require_api_key(x_api_key)
+    _count_event()
+    result, session_id = ingest_url_scan(req.url, session_manager)
+    response: Dict = {"scan": result, "sessionId": session_id}
+    if session_id:
+        incident = incident_index(session_manager.list_sessions()).get(session_id)
+        if incident:
+            from services.reporting import session_report
+            state = session_manager.get(session_id)
+            if state:
+                response["incidentSummary"] = session_report(state, incident).get("incident")
+    return response
+
+
+@app.post("/api/scan/email")
+async def scan_email_endpoint(req: EmailScanRequest, x_api_key: Optional[str] = Header(None)):
+    """Analyse a raw email for phishing signals and feed sender domain into the correlator."""
+    _require_api_key(x_api_key)
+    _count_event()
+    result, session_id = ingest_email_scan(req.rawEmail, session_manager)
+    response: Dict = {"scan": result, "sessionId": session_id}
+    if session_id:
+        incident = incident_index(session_manager.list_sessions()).get(session_id)
+        if incident:
+            from services.reporting import session_report
+            state = session_manager.get(session_id)
+            if state:
+                response["incidentSummary"] = session_report(state, incident).get("incident")
+    return response
 
 
 @app.post("/api/message")
@@ -500,7 +633,11 @@ async def ingest_batch(batch: IngestBatch, x_api_key: Optional[str] = Header(Non
     accepted, failed = 0, []
     for event in batch.events:
         try:
-            await handle_message(event, x_api_key)
+            if isinstance(event, TechnicalEvent):
+                _count_event()
+                ingest_technical_event(event, session_manager)
+            else:
+                await handle_message(event, x_api_key)
             accepted += 1
         except HTTPException:
             raise

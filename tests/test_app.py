@@ -7,6 +7,10 @@ from fastapi import HTTPException
 
 
 # Ensure tests are deterministic and never hit real external services.
+# config prefers HONEY_POT_API_KEY over API_KEY, so both must be pinned or a
+# lingering HONEY_POT_API_KEY in the host environment silently wins and every
+# authenticated call fails with 401.
+os.environ["HONEY_POT_API_KEY"] = "test-api-key"
 os.environ["API_KEY"] = "test-api-key"
 os.environ["OPENROUTER_API_KEY"] = ""
 os.environ["ENABLE_LLM_EXTRACTION"] = "false"
@@ -73,6 +77,92 @@ class HoneypotTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("9876543210", intel.bank_accounts)
         self.assertIn("SBIN0001234", intel.ifsc_codes)
 
+    def test_long_account_numbers_are_not_mistaken_for_phone_numbers(self):
+        """A 14-digit mule account was being extracted as a phone, so the plan chased a
+        number that does not exist and never froze the account."""
+        intel = Intelligence()
+        extract_intelligence(
+            ["Case ID SBI-88911. Call 9812345670 to confirm. Or deposit to 50100234567890, IFSC SBIN0001234."],
+            intel,
+        )
+        self.assertEqual(sorted(intel.phone_numbers), ["+919812345670"])
+        self.assertEqual(sorted(intel.bank_accounts), ["50100234567890"])
+        self.assertEqual(sorted(intel.ifsc_codes), ["SBIN0001234"])
+        # An IFSC is not a case reference; it has its own field.
+        self.assertEqual(sorted(intel.case_ids), ["SBI-88911"])
+
+        # A bare 15-digit run stays an account even though it starts with 91.
+        other = Intelligence()
+        extract_intelligence(["Pay the penalty to 918823456789012 or face arrest. Call +91-9876543210."], other)
+        self.assertEqual(sorted(other.phone_numbers), ["+919876543210"])
+        self.assertEqual(sorted(other.bank_accounts), ["918823456789012"])
+
+    def test_rule_based_replies_never_reference_things_the_scammer_never_sent(self):
+        """`missing_intel_targets` lists what was NEVER captured, so asking the scammer
+        to "resend the link" when no link was ever sent is a persona-breaking tell."""
+        from agent.reply_agent import generate_rule_based_reply
+
+        state = SessionState(session_id="coherence", persona_id="retired_teacher", persona_label="Arthur")
+        state.scam_detected = True
+        state.scam_category = "BANK_FRAUD"
+
+        # A scammer who never sends a link, a UPI id, or a URL.
+        messages = [
+            "Your SBI KYC has expired. Your account will be blocked today. Verify immediately.",
+            "Case ID SBI-88911. Call 9812345670 to confirm.",
+            "You must complete this before 6pm or the account is frozen.",
+            "This is your final reminder from the bank.",
+            "Do not ignore this message.",
+            "Confirm now to avoid penalty.",
+        ]
+        presupposing = ("resend the link", "the link again", "send it again", "still cannot open the link")
+
+        for text in messages:
+            state.transcript.append(TranscriptMessage(sender="scammer", text=text, timestamp=1))
+            reply = generate_rule_based_reply(state)
+            lowered = reply.lower()
+            for phrase in presupposing:
+                self.assertNotIn(phrase, lowered, f"turn {state.agent_turns}: {reply!r}")
+            state.transcript.append(TranscriptMessage(sender="user", text=reply, timestamp=2, provider="rules"))
+            state.agent_turns += 1
+
+    def test_opening_line_matches_the_detected_category(self):
+        """One hardcoded opener asked "which bank is this about?" about parcel seizures
+        and lottery wins - the first reply is the one most likely to blow the persona."""
+        from agent.reply_agent import generate_rule_based_reply
+
+        def opener(category):
+            state = SessionState(session_id=f"open-{category}", persona_id="retired_teacher", persona_label="A")
+            state.scam_detected = True
+            state.scam_category = category
+            state.transcript.append(TranscriptMessage(sender="scammer", text="hello", timestamp=1))
+            return generate_rule_based_reply(state).lower()
+
+        self.assertIn("bank", opener("BANK_FRAUD"))
+        self.assertIn("lottery", opener("LOTTERY_SCAM"))
+        self.assertIn("department", opener("DIGITAL_ARREST"))
+        self.assertIn("refund", opener("REFUND_SCAM"))
+        self.assertIn("invested", opener("CRYPTO_SCAM"))
+
+        # Nothing that is not about a bank should ask which bank it is.
+        for category in ("LOTTERY_SCAM", "DIGITAL_ARREST", "REFUND_SCAM", "CRYPTO_SCAM", "UPI_FRAUD"):
+            self.assertNotIn("which bank", opener(category), category)
+
+    def test_crypto_investment_lure_is_detected(self):
+        """A wallet address was extracted but the message scored 1/10, so no incident was
+        declared and FLAG_CRYPTO_WALLET never fired."""
+        detector = ScamDetector()
+        lure = detector.detect(
+            "Bitcoin doubling scheme closing today. Send 0.01 BTC to "
+            "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq for guaranteed 2x."
+        )
+        self.assertTrue(lure.is_scam)
+        self.assertEqual(lure.category, "CRYPTO_SCAM")
+        self.assertIn("wallet", lure.triggers)
+
+        # Merely mentioning bitcoin is not a scam.
+        self.assertFalse(detector.detect("I bought some bitcoin last year and it did well.").is_scam)
+
     def test_agent_reply_uses_openrouter_then_falls_back_to_rules(self):
         state = SessionState(session_id="s1", persona_id="retired_teacher", persona_label="Arthur")
         state.scam_detected = True
@@ -130,6 +220,40 @@ class HoneypotTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(calls, ["bad/model:free", "good/model:free"])
         finally:
             llm_clients.requests.post = original
+
+    def test_daily_quota_stops_walking_the_whole_model_chain(self):
+        """OpenRouter's free tier caps requests per DAY per account, so once it trips
+        every slug 429s. Walking all nine costs nine round-trips per reply for nothing."""
+        import agent.llm_clients as llm_clients
+
+        class _Response:
+            def __init__(self, status_code, text="", headers=None):
+                self.status_code, self.text, self.headers = status_code, text, headers or {}
+
+            def json(self):
+                return {"choices": [{"message": {"content": "hi"}}]}
+
+        calls = []
+        daily = '{"error":{"message":"Rate limit exceeded: free-models-per-day"}}'
+
+        original_post, original_health = llm_clients.requests.post, llm_clients._health
+        llm_clients._health = llm_clients._ModelHealth()
+        llm_clients.requests.post = lambda url, headers=None, json=None, timeout=None: (
+            calls.append(json["model"]) or _Response(429, daily)
+        )
+        try:
+            client = llm_clients.OpenRouterClient(
+                api_key="k", models=tuple(f"m{i}/x:free" for i in range(9)), timeout_seconds=1
+            )
+            self.assertIsNone(client.chat([{"role": "user", "content": "x"}], 0.5, 20))
+            self.assertEqual(len(calls), 1, "must stop at the first daily-cap 429")
+
+            # Subsequent replies do not touch the network at all until it resets.
+            self.assertIsNone(client.chat([{"role": "user", "content": "x"}], 0.5, 20))
+            self.assertEqual(len(calls), 1, calls)
+            self.assertGreater(llm_clients.model_health_snapshot()["chainBlockedSeconds"], 0)
+        finally:
+            llm_clients.requests.post, llm_clients._health = original_post, original_health
 
     # --- Feature 11: multi-language ------------------------------------------
 
@@ -211,6 +335,107 @@ class HoneypotTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(campaign.recommended_action)
         # Ranked worst-first so an operator can work top down.
         self.assertGreaterEqual(incidents[0].severity_score, incidents[-1].severity_score)
+
+    def test_sanitize_reply_rejects_leaked_model_reasoning(self):
+        """Reasoning models burn the 120-token budget planning and return the plan.
+        Sending that to a scammer is worse than saying "as an AI"."""
+        from agent.llm_clients import sanitize_reply
+
+        # Real captures from nvidia/nemotron-* on this project's own prompt.
+        for leak in (
+            "We need to respond as a potential scam victim, polite, slightly confused, ask for clarification",
+            "The user wants a reply as a potential scam victim, staying in role, concise, human",
+            "<think>Arthur should sound worried</think>",
+        ):
+            self.assertEqual(sanitize_reply(leak), "", leak)
+
+        # In-character replies survive, in English and romanized Hindi.
+        self.assertTrue(sanitize_reply("Oh dear, I am worried. Let me check with my bank branch."))
+        self.assertTrue(sanitize_reply("Kya aap bank se baat kar rahe hain? Mujhe samajh nahi aa raha."))
+        # A think block around a real answer keeps the answer.
+        self.assertEqual(sanitize_reply("<think>plan</think> Which bank is this?"), "Which bank is this?")
+
+    # --- Phase 0 guard --------------------------------------------------------
+    #
+    # The contract for adding a second threat source. Every number below is what
+    # today's honeypot produces for a fixed campaign; adding technical indicator
+    # kinds, categories or playbook rows must not move any of them. If this test
+    # fails, the extension changed honeypot behaviour - that is the bug, not this
+    # test being too strict.
+    #
+    # Deliberately absolute: fixed timestamps and an explicit `now`, so the score
+    # does not drift with the wall clock.
+
+    GUARD_BASE_TS = 1_700_000_000.0
+
+    def _guard_campaign(self):
+        def make(sid, offset, upi=None, phone=None, link=None):
+            state = SessionState(session_id=sid, persona_id="retired_teacher", persona_label="Arthur (65)")
+            state.scam_detected = True
+            state.scam_category = "UPI_FRAUD"
+            state.scam_confidence = 0.9
+            state.language, state.language_name = "hi", "Hindi"
+            state.first_scam_timestamp = self.GUARD_BASE_TS + offset
+            state.created_at = self.GUARD_BASE_TS + offset
+            state.updated_at = self.GUARD_BASE_TS + offset + 30
+            state.transcript.append(TranscriptMessage(sender="scammer", text="pay now", timestamp=1))
+            state.transcript.append(TranscriptMessage(sender="user", text="ok", timestamp=2))
+            if upi:
+                state.intel.upi_ids.add(upi)
+            if phone:
+                state.intel.phone_numbers.add(phone)
+            if link:
+                state.intel.phishing_links.add(link)
+            return state
+
+        return [
+            make("guard-a", 0, upi="mule.pay@ybl"),
+            make("guard-b", 20, upi="mule.pay@ybl", phone="+919876543210"),
+            make("guard-c", 40, upi="mule.pay@ybl", link="http://secure-kyc-verify.tk/login"),
+        ]
+
+    def test_guard_honeypot_severity_is_unchanged(self):
+        incidents = declare_incidents(self._guard_campaign(), now=self.GUARD_BASE_TS + 120)
+        self.assertEqual(len(incidents), 1)
+        incident = incidents[0]
+
+        self.assertEqual(incident.severity_score, 67.85)
+        self.assertEqual(
+            incident.score_breakdown,
+            {"attackType": 27.0, "breadth": 10.0, "velocity": 12.85, "intelValue": 9.0, "confidence": 9.0},
+        )
+        self.assertEqual(incident.severity, "HIGH")
+        self.assertEqual(incident.triage, "ACTION_REQUIRED")
+        self.assertEqual(incident.sessions_per_minute, 2.57)
+        self.assertEqual(incident.duration_seconds, 70)
+
+    def test_guard_honeypot_correlation_and_naming_are_unchanged(self):
+        incident = declare_incidents(self._guard_campaign(), now=self.GUARD_BASE_TS + 120)[0]
+
+        self.assertEqual(incident.session_ids, ["guard-a", "guard-b", "guard-c"])
+        self.assertEqual(
+            incident.shared_indicators,
+            ["domain:secure-kyc-verify.tk", "phone:9876543210", "upi:mule.pay@ybl"],
+        )
+        # Names the freezable identifier, not the caller ID.
+        self.assertEqual(incident.name, "UPI payment fraud campaign via mule.pay@ybl (3 sessions)")
+        # Derived from the sorted session ids, so it is stable across restarts.
+        self.assertEqual(incident.incident_id, "INC-110D3888")
+
+    def test_guard_honeypot_response_plan_is_unchanged(self):
+        incident = declare_incidents(self._guard_campaign(), now=self.GUARD_BASE_TS + 120)[0]
+
+        self.assertEqual(
+            [(a.action, a.target, a.priority, a.sla_minutes) for a in incident.response_plan],
+            [
+                ("FREEZE_UPI_HANDLE", "mule.pay@ybl", 1, 30),
+                ("FILE_CYBERCRIME_REPORT", "UPI_FRAUD campaign", 1, 60),
+                ("BLOCK_AND_TAKEDOWN_DOMAIN", "secure-kyc-verify.tk", 2, 60),
+                ("REPORT_CALLER_NUMBER", "9876543210", 3, 120),
+                ("ISSUE_CUSTOMER_ADVISORY", "3 targeted sessions", 3, 240),
+                ("ROUTE_TO_LANGUAGE_ANALYST", "hi", 4, 240),
+            ],
+        )
 
     async def test_dashboard_summary_and_incidents_are_open(self):
         summary = await main.dashboard_summary()

@@ -3,14 +3,14 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Honey-Pot Operations</title>
+  <title>AI Threat Operations Centre</title>
   <link rel="stylesheet" href="/static/dashboard.css" />
 </head>
 <body>
   <header class="topbar">
     <div>
-      <h1>Agentic Honey-Pot &mdash; Operations</h1>
-      <p>Live scam engagement telemetry, incident triage and multi-language detection</p>
+      <h1>AI Threat Operations Centre</h1>
+      <p>Social-engineering honeypot &middot; Technical attack detection &middot; Cross-source incident correlation &amp; automated response</p>
     </div>
     <div class="topbar-actions">
       <span id="liveStatus" class="live-dot">connecting&hellip;</span>
@@ -52,14 +52,21 @@
         <span id="tileIntel" class="value">0</span>
         <span id="tileIntelSub" class="sub">UPI 0 &middot; links 0 &middot; phones 0 &middot; accounts 0</span>
       </div>
+      <div class="tile">
+        <span class="label">Detection sources</span>
+        <span id="tileSourceValue" class="value">0</span>
+        <span id="tileSourceSub" class="sub">honeypot 0 &middot; technical 0 &middot; mixed 0</span>
+        <div id="tileSourceBar" class="source-bar"></div>
+      </div>
     </section>
 
     <section class="panel">
       <h2>Declared incidents</h2>
       <p class="hint">
-        Alerts sharing a payment ID, phone, domain or account are grouped into one attack,
-        scored 0&ndash;100 on attack type, breadth, velocity, captured intel and confidence, then
-        given a response plan &mdash; what to do, to which target, by whom, by when.
+        Events from both the social-engineering honeypot and technical feeds (auth logs, brute-force detectors)
+        are correlated on shared indicators — a phishing domain seen in a scam conversation and in an auth-failure
+        burst collapses into one <b>Mixed</b> incident. Each incident is scored 0–100 and given a prioritised
+        response plan: what to do, to which target, by whom, by when.
       </p>
       <ul id="incidentList" class="incident-list"></ul>
     </section>
@@ -71,13 +78,13 @@
         <svg id="severityChart" class="chart" role="img" aria-label="Incident count by severity"></svg>
       </div>
       <div class="panel">
-        <h2>Scam categories</h2>
-        <p class="hint">Confirmed-scam sessions by attack type.</p>
-        <svg id="categoryChart" class="chart" role="img" aria-label="Sessions by scam category"></svg>
+        <h2>Attack categories</h2>
+        <p class="hint">All detected attack types — social engineering and technical (credential stuffing, brute force, etc.).</p>
+        <svg id="categoryChart" class="chart" role="img" aria-label="Sessions by attack category"></svg>
       </div>
       <div class="panel">
-        <h2>Scammer language</h2>
-        <p class="hint">Detected operating language per session.</p>
+        <h2>Language <span style="font-weight:400;color:var(--text-muted)">(honeypot sessions)</span></h2>
+        <p class="hint">Operating language detected in social-engineering sessions. Not applicable to technical feed events.</p>
         <svg id="languageChart" class="chart" role="img" aria-label="Sessions by detected language"></svg>
       </div>
     </section>
@@ -104,16 +111,49 @@
       </div>
     </section>
 
+    <section class="row-2">
+      <div class="panel">
+        <h2>URL / Domain Scanner</h2>
+        <p class="hint">
+          Paste any suspicious URL or domain. Analysis is entirely offline — no DNS lookups,
+          no outbound HTTP calls, zero data leakage, air-gap safe.
+          Signals: abused TLDs (.tk .xyz .ml), brand impersonation (SBI, HDFC, IRCTC…),
+          suspicious keywords, IP-as-host, subdomain depth, hyphen density, non-standard ports.
+          Threats feed into the incident correlator automatically.
+        </p>
+        <form id="urlScanForm" class="probe-form">
+          <input id="urlScanInput" type="text" placeholder="http://sbi-kyc-verify.tk/login or just a domain" style="flex:1 1 320px" />
+          <button type="submit">Scan URL</button>
+        </form>
+        <div class="probe-samples" id="urlScanSamples"></div>
+        <div id="urlScanResult" class="probe-result"></div>
+      </div>
+
+      <div class="panel">
+        <h2>Email Phishing Analyser</h2>
+        <p class="hint">
+          Paste a raw email (headers + body — use "View Source" or "Show Original" in your mail client).
+          Checks display-name spoofing, SPF/DKIM/DMARC, reply-to mismatch and suspicious URLs.
+        </p>
+        <form id="emailScanForm" class="probe-form">
+          <textarea id="emailScanInput" placeholder="From: SBI Bank &lt;support@gmail.com&gt;&#10;Subject: Urgent KYC Update Required&#10;&#10;Dear customer, your account will be suspended..." style="flex:1 1 320px;min-height:90px"></textarea>
+          <button type="submit">Analyse Email</button>
+        </form>
+        <div class="probe-samples" id="emailScanSamples"></div>
+        <div id="emailScanResult" class="probe-result"></div>
+      </div>
+    </section>
+
     <section class="row-sessions">
       <div class="panel">
-        <h2>Sessions</h2>
-        <p class="hint">Most recently active first.</p>
+        <h2>Sessions &amp; Events</h2>
+        <p class="hint">Honeypot conversations and technical feed events, most recent first. Blue border = honeypot &middot; Green border = technical.</p>
         <ul id="sessionList" class="session-list"></ul>
       </div>
       <div class="panel">
         <h2>Session detail</h2>
-        <div id="sessionMeta" class="meta">Select a session.</div>
-        <h3>Transcript</h3>
+        <div id="sessionMeta" class="meta">Select a session or event.</div>
+        <h3 id="transcriptLabel">Transcript</h3>
         <div id="transcript" class="transcript"></div>
         <h3>Extracted intelligence</h3>
         <pre id="intel" class="intel"></pre>
@@ -153,6 +193,6 @@
   </main>
 
   <div id="tooltip" role="tooltip" aria-hidden="true"></div>
-  <script src="/static/dashboard.js"></script>
+  <script src="/static/dashboard.js?v=scanners-1"></script>
 </body>
 </html>

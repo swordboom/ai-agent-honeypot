@@ -1,0 +1,455 @@
+/* ============================================================
+   CYBER SENTINEL — Custom styles
+   Design system: Analog Intelligence (neo-brutalist, flat)
+   All corners: 0px. All borders: 1px solid #c4c6ce.
+   ============================================================ */
+
+/* ---------- Google Fonts ---------- */
+@import url('https://fonts.googleapis.com/css2?family=Geist:wght@400;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500&display=swap');
+
+/* ---------- Material Symbols ---------- */
+.material-symbols-outlined {
+  font-family: 'Material Symbols Outlined';
+  font-weight: normal;
+  font-style: normal;
+  font-size: 20px;
+  line-height: 1;
+  letter-spacing: normal;
+  text-transform: none;
+  display: inline-block;
+  white-space: nowrap;
+  word-wrap: normal;
+  direction: ltr;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: 'liga';
+  vertical-align: middle;
+  user-select: none;
+}
+
+/* ---------- Base reset ---------- */
+*, *::before, *::after {
+  box-sizing: border-box;
+  border-radius: 0 !important;
+}
+
+body {
+  margin: 0;
+  background: #faf9fb;
+  color: #1b1c1e;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---------- Scrollbar ---------- */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #f5f3f6;
+}
+::-webkit-scrollbar-thumb {
+  background: #c4c6ce;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #74777e;
+}
+
+/* ---------- View routing ---------- */
+.view {
+  display: none;
+}
+.view.active {
+  display: block;
+}
+
+/* ---------- Top-nav active link ---------- */
+.nav-active {
+  border-bottom: 2px solid #000f22;
+  font-weight: 700;
+  color: #000f22 !important;
+}
+
+/* ---------- Sidebar active item ---------- */
+.sidebar-active {
+  background: #e3e2e5;
+  border-right: 3px solid #000f22;
+  color: #000f22 !important;
+  font-weight: 600;
+}
+
+/* ---------- Chat bubbles ---------- */
+.chat-scammer {
+  border-left: 2px solid #ba1a1a;
+  background: #fff5f5;
+  padding: 8px 12px;
+  margin-bottom: 8px;
+}
+
+.chat-honeypot {
+  border-left: 2px solid #000f22;
+  background: #f5f3f6;
+  padding: 8px 12px;
+  margin-bottom: 8px;
+}
+
+.chat-meta {
+  font-size: 10px;
+  color: #74777e;
+  font-family: 'IBM Plex Mono', monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 4px;
+}
+
+.chat-text {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 12px;
+  color: #1b1c1e;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+/* ---------- Metric tiles ---------- */
+.metric-tile {
+  border-right: 1px solid #c4c6ce;
+  padding: 16px 20px;
+  min-width: 0;
+}
+.metric-tile:last-child {
+  border-right: none;
+}
+.metric-tile-label {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #74777e;
+  margin-bottom: 4px;
+}
+.metric-tile-value {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 28px;
+  font-weight: 600;
+  color: #000f22;
+  line-height: 1.1;
+}
+.metric-tile-sub {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  color: #74777e;
+  margin-top: 4px;
+}
+
+/* ---------- Funnel steps ---------- */
+.funnel-bar-track {
+  background: #e3e2e5;
+  height: 4px;
+  width: 100%;
+}
+.funnel-bar-fill {
+  height: 4px;
+  background: #000f22;
+}
+.funnel-step-row {
+  padding: 10px 0;
+  border-bottom: 1px solid #e3e2e5;
+}
+.funnel-step-row:last-child {
+  border-bottom: none;
+}
+
+/* ---------- Incident rows ---------- */
+.incident-row {
+  padding: 10px 12px;
+  border-bottom: 1px solid #e3e2e5;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.incident-row:hover {
+  background: #f5f3f6;
+}
+.incident-row.selected {
+  background: #e3e2e5;
+  border-left: 3px solid #000f22;
+}
+
+/* ---------- Severity chips ---------- */
+.chip {
+  display: inline-block;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border: 1px solid;
+  line-height: 1.4;
+}
+.chip-critical { border-color: #ba1a1a; color: #ba1a1a; background: #ffdad6; }
+.chip-high     { border-color: #d97706; color: #d97706; background: #fef3c7; }
+.chip-medium   { border-color: #d97706; color: #d97706; background: #fffbeb; }
+.chip-low      { border-color: #74777e; color: #74777e; background: #f5f3f6; }
+.chip-benign   { border-color: #74777e; color: #74777e; background: #f5f3f6; }
+.chip-info     { border-color: #0a2540; color: #0a2540; background: #e8f0f8; }
+.chip-neutral  { border-color: #c4c6ce; color: #43474d; background: #faf9fb; }
+.chip-honeypot { border-color: #000f22; color: #000f22; background: #e8f0f8; }
+.chip-technical{ border-color: #0a2540; color: #0a2540; background: #dce8f4; }
+.chip-mixed    { border-color: #d97706; color: #d97706; background: #fef3c7; }
+
+/* ---------- Analysis workspace ---------- */
+.indicator-row {
+  display: flex;
+  align-items: flex-start;
+  min-height: 32px;
+  border-bottom: 1px solid #e3e2e5;
+  padding: 4px 0;
+}
+.indicator-row:last-child {
+  border-bottom: none;
+}
+.indicator-icon {
+  width: 32px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding-top: 2px;
+}
+.indicator-label {
+  width: 192px;
+  flex-shrink: 0;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  color: #43474d;
+  padding-top: 4px;
+  padding-right: 8px;
+}
+.indicator-desc {
+  flex: 1;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  color: #1b1c1e;
+  padding-top: 4px;
+  line-height: 1.4;
+  word-break: break-all;
+}
+.indicator-desc strong {
+  font-weight: 600;
+  color: #000f22;
+}
+
+/* ---------- Score panel tints ---------- */
+.score-tint-error    { background: rgba(186,26,26,0.06); }
+.score-tint-warning  { background: rgba(217,119,6,0.06); }
+.score-tint-low      { background: rgba(116,119,126,0.04); }
+.score-tint-benign   { background: rgba(116,119,126,0.04); }
+
+/* ---------- Verdict bar ---------- */
+.verdict-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  border: 1px solid #c4c6ce;
+  border-top: none;
+  background: #faf9fb;
+}
+.verdict-bar-error   { background: #ffdad6; border-color: #ba1a1a; }
+.verdict-bar-warning { background: #fef3c7; border-color: #d97706; }
+.verdict-bar-low     { background: #f5f3f6; border-color: #74777e; }
+.verdict-bar-benign  { background: #f5f3f6; border-color: #74777e; }
+
+/* ---------- Tab buttons ---------- */
+.tab-btn {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 8px 16px;
+  border: 1px solid #c4c6ce;
+  border-bottom: none;
+  background: #f5f3f6;
+  color: #74777e;
+  cursor: pointer;
+  position: relative;
+  top: 1px;
+}
+.tab-btn.tab-active {
+  background: #faf9fb;
+  color: #000f22;
+  font-weight: 700;
+  border-bottom: 2px solid #faf9fb;
+}
+.tab-btn:hover:not(.tab-active) {
+  background: #e3e2e5;
+  color: #1b1c1e;
+}
+
+/* ---------- Sample buttons ---------- */
+.sample-btn {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  font-weight: 500;
+  padding: 3px 8px;
+  border: 1px solid #c4c6ce;
+  background: #faf9fb;
+  color: #43474d;
+  cursor: pointer;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.sample-btn:hover {
+  background: #e3e2e5;
+  color: #000f22;
+}
+
+/* ---------- Primary action button ---------- */
+.btn-primary {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 8px 20px;
+  background: #000f22;
+  color: #ffffff;
+  border: 1px solid #000f22;
+  cursor: pointer;
+}
+.btn-primary:hover {
+  background: #0a2540;
+  border-color: #0a2540;
+}
+.btn-primary:disabled {
+  background: #74777e;
+  border-color: #74777e;
+  cursor: not-allowed;
+}
+
+/* ---------- Secondary button ---------- */
+.btn-secondary {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 6px 14px;
+  background: #faf9fb;
+  color: #000f22;
+  border: 1px solid #000f22;
+  cursor: pointer;
+}
+.btn-secondary:hover {
+  background: #e3e2e5;
+}
+
+/* ---------- Input fields ---------- */
+.cs-input {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 12px;
+  color: #1b1c1e;
+  background: #faf9fb;
+  border: 1px solid #c4c6ce;
+  padding: 8px 10px;
+  outline: none;
+  width: 100%;
+}
+.cs-input:focus {
+  border-color: #000f22;
+}
+
+/* ---------- Section label ---------- */
+.section-label {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #74777e;
+}
+
+/* ---------- Page title ---------- */
+.page-title {
+  font-family: 'Geist', 'IBM Plex Mono', monospace, sans-serif;
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: #000f22;
+  text-transform: uppercase;
+}
+
+/* ---------- Correlated chip in analysis ---------- */
+.correlated-chip {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border: 1px solid #000f22;
+  color: #000f22;
+  background: #e8f0f8;
+}
+
+/* ---------- Campaign card ---------- */
+.campaign-card {
+  border: 1px solid #c4c6ce;
+  border-bottom: none;
+  padding: 10px 12px;
+}
+.campaign-card:last-child {
+  border-bottom: 1px solid #c4c6ce;
+}
+.campaign-card:hover {
+  background: #f5f3f6;
+}
+
+/* ---------- Session rows ---------- */
+.session-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid #e3e2e5;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+}
+.session-row:last-child {
+  border-bottom: none;
+}
+
+/* ---------- Score big number ---------- */
+.score-number {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 64px;
+  font-weight: 700;
+  line-height: 1;
+  color: #000f22;
+}
+.score-number.score-error   { color: #ba1a1a; }
+.score-number.score-warning { color: #d97706; }
+.score-number.score-low     { color: #43474d; }
+
+/* ---------- Response plan ---------- */
+.plan-step {
+  padding: 8px 0;
+  border-bottom: 1px solid #e3e2e5;
+}
+.plan-step:last-child {
+  border-bottom: none;
+}
+
+/* ---------- Misc ---------- */
+.monospace { font-family: 'IBM Plex Mono', monospace; }
+.geist     { font-family: 'Geist', sans-serif; }
+.text-error   { color: #ba1a1a; }
+.text-warning { color: #d97706; }
+.text-info    { color: #0a2540; }
+.text-secondary { color: #43474d; }
+.text-outline   { color: #74777e; }

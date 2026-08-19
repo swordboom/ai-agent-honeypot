@@ -27,7 +27,7 @@ def build_tactical_hint(missing_targets: List[str]) -> str:
     if "upi" in missing_targets:
         return "Ask naturally for their UPI handle and payment instruction details."
     if "link" in missing_targets:
-        return "Ask for the exact verification link again and claim it did not open."
+        return "Ask where the verification page is and for the exact link, without implying they already sent one."
     if "phone" in missing_targets:
         return "Ask for a callback number and official contact for confirmation."
     if "account" in missing_targets:
@@ -41,21 +41,19 @@ def _system_prompt(persona: Persona, metadata: Optional[Metadata], state: Sessio
     language = metadata.language if metadata and metadata.language else "English"
 
     return (
-        "You are role-playing as a potential scam victim. Stay believable, concise, and human. "
-        "Do not disclose that you are an AI, bot, or honeypot. Do not provide illegal or harmful instructions. "
-        "Do not insult or harass. Keep reply under 35 words unless clarification is needed. "
-        "Prefer a soft, investigative tone and include at least one clarifying question when practical. "
-        # Feature 11: a victim who suddenly switches to English is an obvious tell.
+        "You are playing an ordinary person who received a suspicious message. "
+        "Act cautious, a little confused, and keep the sender talking by asking short clarifying questions. "
+        "Never reveal you are an AI or that you suspect fraud. Never provide harmful instructions or insult anyone. "
+        "Keep every reply under 35 words. Write in first person as yourself, not as a narrator. "
+        "Do not add labels, headings, or meta-commentary — just the reply text itself. "
         f"{reply_language_instruction(state.language)} "
-        f"Detected scammer language: {state.language_name}. "
-        f"Scam category: {state.scam_category}. "
-        f"Strategy state: {state.strategy_state}. "
-        f"Rolling risk score: {state.rolling_scam_score}. "
-        f"Persona: {persona.display_name}, {persona.age_profile}. "
-        f"Style: {persona.style_rules} "
-        f"Goal bias: {persona.goal_bias} "
-        f"Context channel={channel}, locale={locale}, language={language}. "
-        f"Internal tactic: {tactical_hint}"
+        f"The sender is communicating in: {state.language_name}. "
+        f"Apparent scheme type: {state.scam_category}. "
+        f"Your character: {persona.display_name}, {persona.age_profile}. "
+        f"Your speaking style: {persona.style_rules} "
+        f"Your goal in this conversation: {persona.goal_bias} "
+        f"Channel={channel}, locale={locale}. "
+        f"Your next move: {tactical_hint}"
     )
 
 
@@ -265,6 +263,37 @@ def _vernacular_reply(state: SessionState, bucket: str, missing: List[str]) -> O
     )
 
 
+# The first reply is the one that has to land. Asking "which bank is this about?"
+# about a parcel seizure or a lottery win is an instant tell, so the opener follows the
+# category the detector just assigned. Every line still fishes for a reference number.
+_OPENING_LINES = {
+    "BANK_FRAUD": "Hi, I just saw your message. Which bank is this about? "
+                  "Please share the official helpline or reference number so I can verify.",
+    "KYC_FRAUD": "Hi, I just saw this. Which bank is my KYC pending with? "
+                 "Please send the official reference number so I can check.",
+    # Payment-neutral: a UPI demand can be a fake bank, a fake job fee or a fake fine.
+    "UPI_FRAUD": "Hi, I just saw this. Who exactly is this payment going to? "
+                 "Please share the official reference number before I send anything.",
+    "LOTTERY_SCAM": "I do not remember entering any lottery. Which company is this, "
+                    "and what is the official reference number?",
+    "DIGITAL_ARREST": "I have not done anything wrong. Which department is this? "
+                      "Please give me an official case number I can check.",
+    "REFUND_SCAM": "Which order or payment is this refund for? "
+                   "Please share the reference number so I can confirm.",
+    "CRYPTO_SCAM": "I have never invested in anything like this. Which company are you from? "
+                   "Please share official details.",
+    "PHISHING": "Sorry, who is this from? Please share an official reference number "
+                "so I can check before I open anything.",
+}
+
+_DEFAULT_OPENING = ("Sorry, who is this? Please share an official reference number "
+                    "so I can verify before I do anything.")
+
+
+def _opening_line(category: str) -> str:
+    return _OPENING_LINES.get(category, _DEFAULT_OPENING)
+
+
 def generate_rule_based_reply(state: SessionState) -> str:
     missing = missing_intel_targets(state)
 
@@ -281,7 +310,7 @@ def generate_rule_based_reply(state: SessionState) -> str:
             [
                 "I am trying now. Please share callback number, reference ID, and exact payment details in one message.",
                 "Before I proceed, send supervisor name, reference ID, and the exact account or UPI details again.",
-                "Network is unstable. Please resend link, helpline, and payment ID together so I can complete quickly.",
+                "Network is unstable. Please send the payment ID, helpline, and reference together so I can complete quickly.",
             ],
             last_reply,
             recent_replies=recent_replies,
@@ -289,17 +318,14 @@ def generate_rule_based_reply(state: SessionState) -> str:
         )
 
     if state.agent_turns == 0:
-        return (
-            "Hi, I just saw your message. Which bank is this about? "
-            "Please share the official helpline or reference number so I can verify."
-        )
+        return _opening_line(state.scam_category)
 
     if state.agent_turns == 1:
         if "link" in missing:
             return _pick_non_repeating(
                 [
-                    "Can you send the verification link again? It is not opening on my phone.",
-                    "Please resend the link once more. It failed to load for me.",
+                    "Where exactly do I need to verify? Is there an official link or website?",
+                    "How do I do this verification? Please send the exact page I should open.",
                 ],
                 last_reply,
                 recent_replies=recent_replies,
@@ -308,8 +334,8 @@ def generate_rule_based_reply(state: SessionState) -> str:
         if "upi" in missing:
             return _pick_non_repeating(
                 [
-                    "My UPI app is not showing any request. What UPI ID should I use?",
-                    "I can pay now. Please share your exact UPI handle again.",
+                    "My UPI app is open but I see no request. What UPI ID should I send it to?",
+                    "I can pay now. What is your exact UPI handle?",
                 ],
                 last_reply,
                 recent_replies=recent_replies,
@@ -343,12 +369,12 @@ def generate_rule_based_reply(state: SessionState) -> str:
     if "upi" in missing:
         return _pick_non_repeating(
             [
-                "I am ready now. Please send the UPI ID and the exact amount again.",
-                "Please confirm the UPI ID once more with the amount so I can transfer now.",
-                "I can do it now. Share the UPI handle and amount one last time.",
+                "I am ready now. What is the UPI ID and the exact amount?",
+                "Tell me the UPI ID with the amount so I can transfer now.",
+                "I can do it now. Which UPI handle and how much?",
                 "My app asks for beneficiary name too. Please send UPI ID, name, and amount together.",
-                "Before I pay, confirm the UPI handle with exact spelling and amount once.",
-                "I am on the payment screen now. Please resend the UPI details exactly.",
+                "Before I pay, give me the UPI handle with exact spelling and the amount.",
+                "I am on the payment screen now. What UPI details do I enter?",
             ],
             last_reply,
             recent_replies=recent_replies,
@@ -358,10 +384,10 @@ def generate_rule_based_reply(state: SessionState) -> str:
     if "link" in missing:
         return _pick_non_repeating(
             [
-                "I still cannot open the link. Please send it again or the official site.",
-                "The link still fails for me. Please resend it carefully.",
-                "The page timed out here. Can you share the same link again?",
-                "Please send the full link again without shortening it.",
+                "Is there an official link for this? I cannot find the page.",
+                "Which site should I open? Please send the full web address.",
+                "I do not see any link in your messages. Where do I complete this?",
+                "Please send the complete link, not a shortened one.",
             ],
             last_reply,
             recent_replies=recent_replies,

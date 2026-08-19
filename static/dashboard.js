@@ -331,9 +331,11 @@ async function apiPost(path, body) {
 
 /* ---------- renderers ---------- */
 
-function renderTiles(summary, incidents) {
+function renderTiles(summary, incidents, sessions) {
   const intel = summary.totalExtracted;
-  const actionable = intel.upiIds + intel.phishingLinks + intel.phoneNumbers + intel.bankAccounts;
+  const actionable =
+    intel.upiIds + intel.phishingLinks + intel.phoneNumbers + intel.bankAccounts +
+    (intel.ipAddresses || 0) + (intel.usernames || 0);
   const worst = incidents.length ? incidents[0].severity : null;
 
   const funnel = summary.triageFunnel || {};
@@ -358,8 +360,39 @@ function renderTiles(summary, incidents) {
   setText("tileIntel", actionable);
   setText(
     "tileIntelSub",
-    `UPI ${intel.upiIds} · links ${intel.phishingLinks} · phones ${intel.phoneNumbers} · accounts ${intel.bankAccounts}`
+    `UPI ${intel.upiIds} · links ${intel.phishingLinks} · phones ${intel.phoneNumbers} · ` +
+      `accounts ${intel.bankAccounts} · IPs ${intel.ipAddresses || 0} · users ${intel.usernames || 0}`
   );
+
+  // Source breakdown tile
+  const allSessions = sessions || [];
+  const honeypotCount = allSessions.filter(s => !s.sourceType || s.sourceType === "honeypot").length;
+  const technicalCount = allSessions.filter(s => s.sourceType === "technical").length;
+  const mixedCount = allSessions.filter(s => s.sourceType === "Mixed").length;
+  const total = Math.max(1, honeypotCount + technicalCount + mixedCount);
+
+  setText("tileSourceValue", total === 1 && honeypotCount === 0 && technicalCount === 0 ? "0" : allSessions.length);
+  setText("tileSourceSub", `honeypot ${honeypotCount} · technical ${technicalCount} · mixed ${mixedCount}`);
+
+  const bar = document.getElementById("tileSourceBar");
+  if (bar) {
+    clear(bar);
+    if (honeypotCount > 0) {
+      const seg = el("span", "sb-honeypot");
+      seg.style.width = `${(honeypotCount / total) * 100}%`;
+      bar.appendChild(seg);
+    }
+    if (technicalCount > 0) {
+      const seg = el("span", "sb-technical");
+      seg.style.width = `${(technicalCount / total) * 100}%`;
+      bar.appendChild(seg);
+    }
+    if (mixedCount > 0) {
+      const seg = el("span", "sb-mixed");
+      seg.style.width = `${(mixedCount / total) * 100}%`;
+      bar.appendChild(seg);
+    }
+  }
 }
 
 function severityColor(severity) {
@@ -398,6 +431,8 @@ function renderIncidents(incidents) {
     chips.appendChild(document.createTextNode(" "));
     chips.appendChild(el("span", "chip neutral", `score ${incident.severityScore}`));
     chips.appendChild(document.createTextNode(" "));
+    chips.appendChild(el("span", "chip neutral", `source: ${incident.sourceType || "Honeypot"}`));
+    chips.appendChild(document.createTextNode(" "));
     chips.appendChild(el("span", "chip neutral", (incident.triage || "").replace(/_/g, " ").toLowerCase()));
     head.appendChild(chips);
     item.appendChild(head);
@@ -405,6 +440,7 @@ function renderIncidents(incidents) {
     const meta = el("div", "incident-meta");
     const facts = [
       ["ID", incident.incidentId],
+      ["Source", incident.sourceType || "Honeypot"],
       ["Sessions", incident.sessionCount],
       ["Rate", `${incident.sessionsPerMinute}/min`],
       ["Duration", formatDuration(incident.durationSeconds)],
@@ -540,35 +576,58 @@ function renderSessions(sessions) {
   clear(list);
 
   if (!sessions.length) {
+    state.selectedSessionId = null;
     list.appendChild(el("li", "empty", "No sessions yet. POST to /api/message to start one."));
     return;
   }
 
+  // A session can expire between dashboard polls. Do not keep requesting the
+  // old id forever: select a current row instead of producing a repeated 404.
+  if (!sessions.some((item) => item.sessionId === state.selectedSessionId)) {
+    state.selectedSessionId = sessions[0].sessionId;
+  }
+
   sessions.forEach((item) => {
+    const isTechnical = item.sourceType === "technical";
+    const isMixed = item.sourceType === "Mixed";
+
     const li = el("li");
     if (state.selectedSessionId === item.sessionId) li.classList.add("active");
+    if (isTechnical) li.classList.add("session-technical");
+    else if (isMixed) li.classList.add("session-mixed");
 
     li.appendChild(el("div", "session-id", item.sessionId));
 
     const row1 = el("div", "session-row");
+    // Source type badge — first and most prominent
+    const sourceLabel = isTechnical ? "technical" : isMixed ? "Mixed" : "honeypot";
+    row1.appendChild(el("span", `chip ${sourceLabel}`, sourceLabel.toUpperCase()));
     if (item.incidentSeverity) {
       row1.appendChild(el("span", `chip ${item.incidentSeverity}`, item.incidentSeverity));
     }
     row1.appendChild(el("span", "chip neutral", prettyCategory(item.scamCategory)));
-    row1.appendChild(el("span", "chip neutral", item.languageName));
+    if (!isTechnical) row1.appendChild(el("span", "chip neutral", item.languageName));
     li.appendChild(row1);
 
     const row2 = el("div", "session-row");
-    row2.appendChild(el("span", null, `risk ${item.rollingScamScore}`));
-    row2.appendChild(el("span", null, `conf ${Math.round((item.scamConfidence || 0) * 100)}%`));
-    row2.appendChild(el("span", null, `${item.messageCount} msgs`));
-    row2.appendChild(el("span", null, item.engagementComplete ? "finalized" : item.strategyState));
+    if (isTechnical) {
+      row2.appendChild(el("span", null, `${item.messageCount} events`));
+      row2.appendChild(el("span", null, `conf ${Math.round((item.scamConfidence || 0) * 100)}%`));
+      row2.appendChild(el("span", null, item.engagementComplete ? "finalized" : "active"));
+    } else {
+      row2.appendChild(el("span", null, `risk ${item.rollingScamScore}`));
+      row2.appendChild(el("span", null, `conf ${Math.round((item.scamConfidence || 0) * 100)}%`));
+      row2.appendChild(el("span", null, `${item.messageCount} msgs`));
+      row2.appendChild(el("span", null, item.engagementComplete ? "finalized" : item.strategyState));
+    }
     li.appendChild(row2);
 
-    const row3 = el("div", "session-row");
-    row3.appendChild(el("span", null, item.persona));
-    row3.appendChild(el("span", null, `via ${item.replyProvider}`));
-    li.appendChild(row3);
+    if (!isTechnical) {
+      const row3 = el("div", "session-row");
+      row3.appendChild(el("span", null, item.persona));
+      row3.appendChild(el("span", null, `via ${providerLabel(item.replyProvider)}`));
+      li.appendChild(row3);
+    }
 
     li.addEventListener("click", () => {
       state.selectedSessionId = item.sessionId;
@@ -578,27 +637,45 @@ function renderSessions(sessions) {
     list.appendChild(li);
   });
 
-  if (!state.selectedSessionId && sessions.length) {
-    state.selectedSessionId = sessions[0].sessionId;
-    renderSessions(sessions);
-    loadSessionDetail(state.selectedSessionId);
-  }
 }
 
 function renderSessionDetail(detail) {
   const meta = document.getElementById("sessionMeta");
   clear(meta);
 
-  const facts = [
+  const isTechnical = detail.sourceType === "technical";
+  const intel = detail.extractedIntelligence || {};
+
+  // Source type banner
+  const sourceLabel = isTechnical ? "technical" : (detail.sourceType === "Mixed" ? "Mixed" : "honeypot");
+  const banner = el("div", "session-row");
+  banner.style.marginBottom = "10px";
+  banner.appendChild(el("span", `chip ${sourceLabel}`, sourceLabel.toUpperCase()));
+  if (detail.incidentSeverity) {
+    banner.appendChild(el("span", `chip ${detail.incidentSeverity}`, detail.incidentSeverity));
+  }
+  meta.appendChild(banner);
+
+  const facts = isTechnical ? [
+    ["Session / Event ID", detail.sessionId],
+    ["Source", "Technical Feed"],
+    ["Attack type", prettyCategory(detail.scamCategory)],
+    ["Events ingested", detail.totalMessages],
+    ["Confidence", `${Math.round((detail.scamConfidence || 0) * 100)}%`],
+    ["Source IPs", (intel.ipAddresses || []).join(", ") || "—"],
+    ["Targeted accounts", (intel.usernames || []).join(", ") || "—"],
+    ["File hashes", (intel.fileHashes || []).join(", ") || "—"],
+  ] : [
     ["Session", detail.sessionId],
     ["Persona", detail.persona],
-    ["Category", prettyCategory(detail.scamCategory)],
+    ["Source", "Social-engineering honeypot"],
+    ["Attack category", prettyCategory(detail.scamCategory)],
     ["Confidence", `${Math.round((detail.scamConfidence || 0) * 100)}%`],
-    ["Risk", detail.rollingScamScore],
+    ["Risk score", detail.rollingScamScore],
     ["Strategy", detail.strategyState],
     ["Language", `${detail.languageName} (${Math.round((detail.languageConfidence || 0) * 100)}%)`],
     ["Vernacular score", detail.vernacularScore],
-    ["Provider", detail.replyProvider],
+    ["Reply via", providerLabel(detail.replyProvider)],
     ["Time wasted", formatDuration(detail.timeWastedSeconds)],
     ["Messages", detail.totalMessages],
   ];
@@ -611,9 +688,6 @@ function renderSessionDetail(detail) {
     meta.appendChild(row);
   });
 
-  if (detail.incidentSeverity) {
-    meta.appendChild(el("span", `chip ${detail.incidentSeverity}`, detail.incidentSeverity));
-  }
   if ((detail.responsePlan || []).length) {
     const plan = el("ol", "response-plan");
     detail.responsePlan.forEach((action) => {
@@ -630,16 +704,33 @@ function renderSessionDetail(detail) {
   }
 
   const transcript = document.getElementById("transcript");
+  const transcriptLabel = document.getElementById("transcriptLabel");
   clear(transcript);
-  detail.transcript.forEach((msg) => {
-    const row = el("div", `msg ${msg.sender === "scammer" ? "scammer" : "user"}`);
-    const label = msg.sender === "scammer" ? "scammer" : "honey-pot";
-    row.appendChild(el("p", "msg-meta", `${label}${msg.provider ? ` · ${msg.provider}` : ""}`));
-    row.appendChild(el("div", "msg-text", msg.text));
-    transcript.appendChild(row);
-  });
 
-  setText("intel", JSON.stringify(detail.extractedIntelligence, null, 2));
+  if (isTechnical) {
+    if (transcriptLabel) transcriptLabel.textContent = "Event summary";
+    const notice = el("div", "msg");
+    notice.style.borderLeftColor = "var(--series-3)";
+    notice.appendChild(el("p", "msg-meta", "technical feed — no conversation"));
+    notice.appendChild(el("div", "msg-text",
+      `This is a technical security event, not a chat session. ` +
+      `Attack type: ${prettyCategory(detail.scamCategory)}. ` +
+      `Source IPs: ${(intel.ipAddresses || []).join(", ") || "none captured"}. ` +
+      `Targeted accounts: ${(intel.usernames || []).join(", ") || "none captured"}.`
+    ));
+    transcript.appendChild(notice);
+  } else {
+    if (transcriptLabel) transcriptLabel.textContent = "Transcript";
+    (detail.transcript || []).forEach((msg) => {
+      const row = el("div", `msg ${msg.sender === "scammer" ? "scammer" : "user"}`);
+      const label = msg.sender === "scammer" ? "scammer" : "honey-pot";
+      row.appendChild(el("p", "msg-meta", `${label}${msg.provider ? ` · ${providerLabel(msg.provider)}` : ""}`));
+      row.appendChild(el("div", "msg-text", msg.text));
+      transcript.appendChild(row);
+    });
+  }
+
+  setText("intel", JSON.stringify(intel, null, 2));
   setText("intelExtended", JSON.stringify(detail.extendedIntelligence || {}, null, 2));
   setText("finalOutput", JSON.stringify(detail.report || {}, null, 2));
 }
@@ -666,6 +757,12 @@ function renderMap(points) {
   });
 }
 
+function providerLabel(p) {
+  if (!p || p === "rules") return "Adaptive rule engine";
+  if (p === "openrouter") return "AI model (OpenRouter)";
+  return p;
+}
+
 function renderModels(models) {
   const body = document.getElementById("modelTableBody");
   clear(body);
@@ -674,28 +771,45 @@ function renderModels(models) {
   const retired = new Set(health.retiredModels || []);
   const cooling = new Set(health.cooldownModels || []);
   const live = new Set(models.liveFreeModels || []);
+  const configured = models.configured || [];
 
   if (!models.apiKeyConfigured) {
     const row = el("tr");
-    const cell = el("td", "empty", "OPENROUTER_API_KEY not set — replies fall back to scripted personas");
+    const cell = el("td", "empty",
+      "OPENROUTER_API_KEY not set — adaptive rule engine handles all replies (multi-turn, multilingual, category-aware)");
     cell.colSpan = 2;
     row.appendChild(cell);
     body.appendChild(row);
+    return;
   }
 
-  (models.configured || []).forEach((model) => {
+  configured.forEach((model) => {
     const row = el("tr");
     row.appendChild(el("td", null, model));
 
     let label = "ready";
-    if (model === health.lastWorkingModel) label = "active";
+    if (model === health.lastWorkingModel) label = "✓ active";
     else if (retired.has(model)) label = "unavailable";
-    else if (cooling.has(model)) label = "cooling down";
+    else if (cooling.has(model)) label = "rate-limited (cooling)";
     else if (live.size && !live.has(model)) label = "not listed by OpenRouter";
 
     row.appendChild(el("td", null, label));
     body.appendChild(row);
   });
+
+  // Banner when every model is unavailable — system still works via rule engine
+  const allDown = configured.length > 0 &&
+    configured.every((m) => retired.has(m) || cooling.has(m) || (live.size && !live.has(m)));
+  if (allDown) {
+    const row = el("tr");
+    const cell = el("td", "meta",
+      "All AI models rate-limited — adaptive rule engine active. " +
+      "Replies remain contextual, multilingual, and category-specific.");
+    cell.colSpan = 2;
+    cell.style.fontStyle = "italic";
+    row.appendChild(cell);
+    body.appendChild(row);
+  }
 }
 
 /* ---------- language probe ---------- */
@@ -772,12 +886,190 @@ function setupProbe() {
   });
 }
 
+/* ---------- scanners ---------- */
+
+const URL_SCAN_SAMPLES = [
+  ["Phishing (CRITICAL)", "http://sbi-kyc-verify.tk/login"],
+  ["Brand lookalike (HIGH)", "https://hdfc-secure-banking.xyz/otp-verify"],
+  ["IP host (CRITICAL)", "http://203.0.113.5:8080/pay"],
+  ["Deep subdomain (MEDIUM)", "https://login.secure.verify.icici-bank.online/account"],
+  ["Benign", "https://www.google.com"],
+];
+
+const EMAIL_SCAN_SAMPLES = [
+  [
+    "Display-name spoof",
+    `From: SBI Bank <sbi.support@gmail.com>\nTo: customer@example.com\nSubject: Urgent KYC Update Required\n\nDear customer, your account will be suspended. Verify now at http://sbi-verify.tk/kyc`,
+  ],
+  [
+    "Reply-To mismatch",
+    `From: HDFC Alert <noreply@hdfcbank.com>\nReply-To: collect@gmail.com\nSubject: Account blocked — action required\n\nYour HDFC account is blocked. Click here to unblock: http://hdfc-unblock.xyz`,
+  ],
+  [
+    "SPF fail + phishing link",
+    `From: Income Tax Dept <refund@incometax.gov.in>\nAuthentication-Results: mx.example.com; spf=fail smtp.mailfrom=incometax.gov.in\nSubject: Tax refund of Rs 18,500 pending\n\nYour refund is ready. Submit your bank details at http://incometax-refund.tk/claim`,
+  ],
+];
+
+function renderScanResult(container, scan, sessionId, label) {
+  clear(container);
+
+  const head = el("div", "session-row");
+  head.style.marginBottom = "10px";
+  const levelClass = { CRITICAL: "CRITICAL", HIGH: "HIGH", MEDIUM: "MEDIUM", LOW: "LOW", INVALID: "neutral" }[scan.riskLevel] || "LOW";
+  head.appendChild(el("span", `chip ${levelClass}`, scan.riskLevel));
+  head.appendChild(el("span", "chip neutral", scan.category || "—"));
+  head.appendChild(el("span", "chip neutral", `score ${scan.riskScore}/100`));
+  if (sessionId) {
+    head.appendChild(el("span", "chip technical", "→ correlated"));
+  }
+  container.appendChild(head);
+
+  if (scan.indicators && scan.indicators.length) {
+    const list = el("ul");
+    list.style.cssText = "margin:8px 0 0;padding-left:18px;font-size:12px;color:var(--text-secondary)";
+    scan.indicators.forEach((ind) => {
+      const li = el("li", null, ind);
+      li.style.marginBottom = "3px";
+      list.appendChild(li);
+    });
+    container.appendChild(list);
+  } else if (scan.riskScore < 20) {
+    container.appendChild(el("div", "meta", `No suspicious signals detected — ${label} appears clean.`));
+  }
+
+  // Extra fields for email
+  if (scan.subject) {
+    const row = el("div", "meta");
+    row.style.marginTop = "8px";
+    [
+      ["Subject", scan.subject],
+      ["From domain", scan.fromDomain || "—"],
+      ["SPF", scan.spfResult || "not detected"],
+      ["DKIM", scan.dkimResult || "not detected"],
+      ["DMARC", scan.dmarcResult || "not detected"],
+    ].forEach(([k, v]) => {
+      const span = el("span");
+      span.appendChild(document.createTextNode(`${k}: `));
+      span.appendChild(el("b", null, v));
+      span.style.marginRight = "16px";
+      row.appendChild(span);
+    });
+    container.appendChild(row);
+  }
+
+  // Extracted URLs
+  if (scan.suspiciousUrls && scan.suspiciousUrls.length) {
+    const tags = el("div", "indicator-tags");
+    tags.appendChild(el("span", "tag-label", "suspicious URLs"));
+    scan.suspiciousUrls.slice(0, 4).forEach((u) => tags.appendChild(el("span", "tag", u.slice(0, 60))));
+    container.appendChild(tags);
+  }
+
+  if (sessionId) {
+    const note = el("div", "meta");
+    note.style.marginTop = "8px";
+    note.appendChild(document.createTextNode("Ingested into correlation engine — "));
+    const link = el("span", null, "refresh incidents ↑");
+    link.style.cursor = "pointer";
+    link.style.color = "var(--series-1)";
+    link.addEventListener("click", refresh);
+    note.appendChild(link);
+    container.appendChild(note);
+  }
+}
+
+function setupUrlScanner(apiKeyFn) {
+  const form = document.getElementById("urlScanForm");
+  const input = document.getElementById("urlScanInput");
+  const result = document.getElementById("urlScanResult");
+  const samples = document.getElementById("urlScanSamples");
+
+  URL_SCAN_SAMPLES.forEach(([label, url]) => {
+    const btn = el("button", null, label);
+    btn.type = "button";
+    btn.addEventListener("click", () => { input.value = url; form.requestSubmit(); });
+    samples.appendChild(btn);
+  });
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const url = input.value.trim();
+    if (!url) return;
+    clear(result);
+    result.appendChild(el("div", "meta", "Scanning…"));
+    try {
+      const headers = { "Content-Type": "application/json" };
+      const key = apiKeyFn();
+      if (key) headers["x-api-key"] = key;
+      const resp = await fetch("/api/scan/url", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ url }),
+      });
+      if (!resp.ok) throw new Error(`${resp.status} ${await resp.text()}`);
+      const data = await resp.json();
+      renderScanResult(result, data.scan, data.sessionId, "URL");
+      if (data.sessionId) await refresh();
+    } catch (err) {
+      clear(result);
+      result.appendChild(el("div", "error", `Scan failed: ${err.message}`));
+    }
+  });
+}
+
+function setupEmailScanner(apiKeyFn) {
+  const form = document.getElementById("emailScanForm");
+  const input = document.getElementById("emailScanInput");
+  const result = document.getElementById("emailScanResult");
+  const samples = document.getElementById("emailScanSamples");
+
+  EMAIL_SCAN_SAMPLES.forEach(([label]) => {
+    const btn = el("button", null, label);
+    btn.type = "button";
+    const idx = EMAIL_SCAN_SAMPLES.findIndex(([l]) => l === label);
+    btn.addEventListener("click", () => {
+      input.value = EMAIL_SCAN_SAMPLES[idx][1];
+      form.requestSubmit();
+    });
+    samples.appendChild(btn);
+  });
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const rawEmail = input.value.trim();
+    if (!rawEmail) return;
+    clear(result);
+    result.appendChild(el("div", "meta", "Analysing…"));
+    try {
+      const headers = { "Content-Type": "application/json" };
+      const key = apiKeyFn();
+      if (key) headers["x-api-key"] = key;
+      const resp = await fetch("/api/scan/email", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ rawEmail }),
+      });
+      if (!resp.ok) throw new Error(`${resp.status} ${await resp.text()}`);
+      const data = await resp.json();
+      renderScanResult(result, data.scan, data.sessionId, "Email");
+      if (data.sessionId) await refresh();
+    } catch (err) {
+      clear(result);
+      result.appendChild(el("div", "error", `Analysis failed: ${err.message}`));
+    }
+  });
+}
+
 /* ---------- loading ---------- */
 
 async function loadSessionDetail(sessionId) {
   try {
     renderSessionDetail(await apiGet(`/dashboard/api/sessions/${encodeURIComponent(sessionId)}`));
   } catch (err) {
+    if (String(err.message).startsWith("404")) {
+      state.selectedSessionId = null;
+    }
     const meta = document.getElementById("sessionMeta");
     clear(meta);
     meta.appendChild(el("span", "error", `Failed to load session: ${err.message}`));
@@ -802,7 +1094,7 @@ async function refresh() {
     state.summary = summary;
     state.sessions = sessions;
 
-    renderTiles(summary, incidents);
+    renderTiles(summary, incidents, sessions);
     renderIncidents(incidents);
     renderCharts(summary);
     renderSessions(sessions);
@@ -860,6 +1152,11 @@ function start() {
   window.addEventListener("resize", () => {
     if (state.summary) renderCharts(state.summary);
   });
+
+  // Scanners read the API key from localStorage (same store as the console).
+  const getApiKey = () => localStorage.getItem("honeypotApiKey") || "";
+  setupUrlScanner(getApiKey);
+  setupEmailScanner(getApiKey);
 
   refresh();
   loadModels();

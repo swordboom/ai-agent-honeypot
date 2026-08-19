@@ -3,14 +3,14 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Honey-Pot Operator Console</title>
+  <title>Threat Operations Console</title>
   <link rel="stylesheet" href="/static/dashboard.css" />
 </head>
 <body>
   <header class="topbar">
     <div>
-      <h1>Operator Console</h1>
-      <p>Feed events in, watch correlation, prioritisation and response recommendation happen live</p>
+      <h1>Threat Operations Console</h1>
+      <p>Social-engineering honeypot &middot; Technical attack feed &middot; Cross-source correlation &middot; Automated response planning</p>
     </div>
     <div class="topbar-actions">
       <span id="liveStatus" class="live-dot">ready</span>
@@ -34,10 +34,11 @@
 
     <section class="row-2">
       <div class="panel">
-        <h2>Live conversation</h2>
+        <h2>Live Honeypot Conversation <span style="font-size:11px;font-weight:400;color:var(--text-muted);margin-left:6px">SOCIAL ENGINEERING</span></h2>
         <p class="hint">
-          Send a message as the scammer. The honey-pot persona replies and the detection
-          pipeline runs on every turn.
+          Simulate a scammer sending messages. The AI honeypot persona replies, the scam detection pipeline runs,
+          and any extracted indicators (UPI IDs, phone numbers, phishing links) feed into the incident correlator.
+          For technical events (auth failures, brute force), use Campaign Replay below.
         </p>
 
         <div class="field-row">
@@ -61,10 +62,11 @@
       </div>
 
       <div class="panel">
-        <h2>Campaign replay</h2>
+        <h2>Campaign Replay <span style="font-size:11px;font-weight:400;color:var(--text-muted);margin-left:6px">HONEYPOT + TECHNICAL</span></h2>
         <p class="hint">
-          Fires a whole multi-session campaign through <code>POST /api/ingest</code> in one call.
-          Sessions that share a payment identifier should collapse into a single incident.
+          Fires pre-built scenarios through <code>POST /api/ingest</code> — including both social-engineering
+          campaigns and technical feed events (credential stuffing, brute force, cross-source correlation).
+          Sessions sharing an indicator (UPI, phone, domain, IP, username) collapse into a single incident.
         </p>
         <div id="scenarioList" class="scenario-list"></div>
 
@@ -73,6 +75,39 @@
 
         <h3>Triage funnel</h3>
         <div id="funnel" class="funnel"></div>
+      </div>
+    </section>
+
+    <section class="row-2">
+      <div class="panel">
+        <h2>URL / Domain Scanner <span style="font-size:11px;font-weight:400;color:var(--text-muted);margin-left:6px">INFRASTRUCTURE</span></h2>
+        <p class="hint">
+          Paste a suspicious URL or domain. Offline analysis only — no DNS, no HTTP,
+          no data leakage, air-gap safe. Checks: abused TLDs, brand impersonation,
+          IP-as-host, suspicious keywords, subdomain depth, non-standard ports.
+          Threats auto-enter the correlator. Try it: scan a domain here, then send
+          a chat containing the same domain above — watch them collapse into one incident.
+        </p>
+        <form id="urlScanForm" class="probe-form">
+          <input id="urlScanInput" type="text" placeholder="http://sbi-kyc-verify.tk/login" style="flex:1 1 280px" />
+          <button type="submit">Scan URL</button>
+        </form>
+        <div class="probe-samples" id="urlScanSamples"></div>
+        <div id="urlScanResult" class="probe-result"></div>
+      </div>
+
+      <div class="panel">
+        <h2>Email Phishing Analyser <span style="font-size:11px;font-weight:400;color:var(--text-muted);margin-left:6px">EMAIL</span></h2>
+        <p class="hint">
+          Paste a raw email (headers + body). Checks display-name spoofing, SPF/DKIM/DMARC,
+          reply-to mismatch, and body URLs. Suspicious domains enter the correlator.
+        </p>
+        <form id="emailScanForm" class="probe-form">
+          <textarea id="emailScanInput" placeholder="From: SBI Bank &lt;support@gmail.com&gt;&#10;Subject: Urgent KYC Update Required&#10;&#10;Body here..." style="flex:1 1 280px;min-height:80px"></textarea>
+          <button type="submit">Analyse Email</button>
+        </form>
+        <div class="probe-samples" id="emailScanSamples"></div>
+        <div id="emailScanResult" class="probe-result"></div>
       </div>
     </section>
 
@@ -92,6 +127,6 @@
   </main>
 
   <div id="tooltip" role="tooltip" aria-hidden="true"></div>
-  <script src="/static/console.js"></script>
+  <script src="/static/console.js?v=scanners-1"></script>
 </body>
 </html>

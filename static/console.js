@@ -61,6 +61,12 @@ function prettyLabel(code) {
     .join(" ");
 }
 
+function providerLabel(p) {
+  if (!p || p === "rules") return "Adaptive rule engine";
+  if (p === "openrouter") return "AI model (OpenRouter)";
+  return p;
+}
+
 /* ---------- conversation ---------- */
 
 function appendChat(sender, text, note) {
@@ -153,15 +159,70 @@ const SCENARIOS = [
       ["noise-4", "Happy birthday! See you at dinner."],
     ],
   },
+  {
+    id: "credential-stuffing",
+    name: "Credential stuffing",
+    blurb: "One source IP, 12 accounts, 50 failures, one success. No conversation involved.",
+    technicalEvents: [authEvent("cred-stuffing", "203.0.113.9", userList(12), 50, { succeeded: true })],
+  },
+  {
+    id: "password-spray",
+    name: "Password spray",
+    blurb: "Reverse fan-out: 8 source IPs, one target account. Should still be ONE incident.",
+    technicalEvents: Array.from({ length: 8 }, (_, i) =>
+      authEvent(`spray-${i + 1}`, `198.51.100.${i + 1}`, ["a.sharma"], 20)
+    ),
+  },
+  {
+    id: "cross-source",
+    name: "Cross-source: honeypot + auth feed",
+    blurb:
+      "Scammer hands us a phishing domain; the auth feed reports an attack from the same domain. " +
+      "Both halves must land in one Mixed incident.",
+    events: [["cross-chat", "Urgent: verify your KYC at http://secure-kyc-verify.tk/login or account is blocked."]],
+    technicalEvents: [
+      authEvent("cross-auth", "203.0.113.9", ["a.sharma", "v.rao"], 40, { domain: "secure-kyc-verify.tk" }),
+    ],
+  },
 ];
 
+function userList(count) {
+  return Array.from({ length: count }, (_, i) => `user${i}`);
+}
+
+/* Mirrors simulator/technical_events.py so the console and the tests fire the
+   same shapes through the same endpoint. */
+function authEvent(eventId, ip, users, count, { succeeded = false, domain = null } = {}) {
+  const indicators = { ip: [ip], user: users };
+  if (domain) indicators.domain = [domain];
+  return {
+    eventId,
+    timestamp: Date.now() / 1000,
+    eventType: "AUTH_FAILURE_BURST",
+    sourceIdentifier: ip,
+    targetIdentifiers: users,
+    indicators,
+    count,
+    confidence: 0.9,
+    detectionSource: "operator-console",
+    succeededAfterFailures: succeeded,
+  };
+}
+
 function buildEvents(scenario) {
-  return scenario.events.map(([sessionId, text]) => ({
+  const chat = (scenario.events || []).map(([sessionId, text]) => ({
     sessionId,
     message: { sender: "scammer", text, timestamp: Date.now() },
     conversationHistory: [],
     metadata: { channel: "SMS", locale: "IN" },
   }));
+  // One batch can carry both kinds - that is what makes cross-source correlation
+  // visible in a single click.
+  return chat.concat(scenario.technicalEvents || []);
+}
+
+function eventCount(scenario) {
+  return (scenario.events || []).length + (scenario.technicalEvents || []).length;
 }
 
 async function runScenario(scenario, button) {
@@ -169,7 +230,7 @@ async function runScenario(scenario, button) {
   button.disabled = true;
   button.textContent = "Sending…";
   try {
-    setStatus(true, `ingesting ${scenario.events.length} events…`);
+    setStatus(true, `ingesting ${eventCount(scenario)} events…`);
     const result = await api("POST", "/api/ingest", { events: buildEvents(scenario) });
     renderIngestResult(scenario, result);
     renderFunnel(result.triageFunnel);
@@ -186,16 +247,36 @@ async function runScenario(scenario, button) {
   }
 }
 
+function scenarioType(scenario) {
+  const hasChat = (scenario.events || []).length > 0;
+  const hasTech = (scenario.technicalEvents || []).length > 0;
+  if (hasChat && hasTech) return "MIXED";
+  if (hasTech) return "TECHNICAL";
+  return "HONEYPOT";
+}
+
 function renderScenarios() {
   const list = byId("scenarioList");
   clear(list);
 
   SCENARIOS.forEach((scenario) => {
     const card = el("div", "scenario");
-    card.appendChild(el("div", "scenario-name", scenario.name));
+
+    const nameRow = el("div", null);
+    nameRow.style.display = "flex";
+    nameRow.style.alignItems = "center";
+    nameRow.style.gap = "8px";
+    nameRow.style.marginBottom = "4px";
+    nameRow.appendChild(el("span", "scenario-name", scenario.name));
+
+    const type = scenarioType(scenario);
+    const typeChip = el("span", `chip ${type === "MIXED" ? "Mixed" : type === "TECHNICAL" ? "technical" : "honeypot"}`, type);
+    nameRow.appendChild(typeChip);
+    card.appendChild(nameRow);
+
     card.appendChild(el("div", "scenario-blurb", scenario.blurb));
 
-    const button = el("button", null, `Replay ${scenario.events.length} events`);
+    const button = el("button", null, `Replay ${eventCount(scenario)} events`);
     button.type = "button";
     button.addEventListener("click", () => runScenario(scenario, button));
     card.appendChild(button);
@@ -268,12 +349,15 @@ function renderIncidents(incidents) {
     chips.appendChild(document.createTextNode(" "));
     chips.appendChild(el("span", "chip neutral", `score ${incident.severityScore}`));
     chips.appendChild(document.createTextNode(" "));
+    chips.appendChild(el("span", "chip neutral", `source: ${incident.sourceType || "Honeypot"}`));
+    chips.appendChild(document.createTextNode(" "));
     chips.appendChild(el("span", "chip neutral", prettyLabel(incident.triage)));
     head.appendChild(chips);
     item.appendChild(head);
 
     const meta = el("div", "incident-meta");
     [
+      ["Source", incident.sourceType || "Honeypot"],
       ["Sessions", incident.sessionCount],
       ["Rate", `${incident.sessionsPerMinute}/min`],
       ["Messages", incident.totalMessages],
@@ -327,6 +411,7 @@ function renderDetection(report) {
   );
   row.appendChild(el("span", "chip neutral", prettyLabel(report.detection.category)));
   row.appendChild(el("span", "chip neutral", report.language.name));
+  row.appendChild(el("span", "chip neutral", `source: ${report.sourceType || "honeypot"}`));
   if (report.incident) {
     row.appendChild(el("span", `chip ${report.incident.severity}`, report.incident.severity));
   }
@@ -338,8 +423,8 @@ function renderDetection(report) {
     ["Confidence", `${Math.round((report.detection.confidence || 0) * 100)}%`],
     ["Strategy", report.detection.strategyState],
     ["Vernacular", report.language.vernacularScore],
-    ["Turns", report.engagement.agentTurns],
-    ["Reply via", report.engagement.replyProvider],
+    ["Turns", report.engagement?.agentTurns ?? 0],
+    ["Reply via", providerLabel(report.engagement?.replyProvider) ?? "not applicable"],
   ].forEach(([label, value]) => {
     const span = el("span");
     span.appendChild(document.createTextNode(`${label}: `));
@@ -446,12 +531,139 @@ function setupChat() {
   });
 }
 
+/* ---------- scanners (shared with dashboard) ---------- */
+
+const URL_SCAN_SAMPLES = [
+  ["Phishing (CRITICAL)", "http://sbi-kyc-verify.tk/login"],
+  ["Brand lookalike (HIGH)", "https://hdfc-secure-banking.xyz/otp-verify"],
+  ["IP host (CRITICAL)", "http://203.0.113.5:8080/pay"],
+  ["Benign", "https://www.google.com"],
+];
+
+const EMAIL_SCAN_SAMPLES = [
+  [
+    "Display-name spoof",
+    `From: SBI Bank <sbi.support@gmail.com>\nTo: customer@example.com\nSubject: Urgent KYC Update Required\n\nDear customer, your account will be suspended. Verify now at http://sbi-verify.tk/kyc`,
+  ],
+  [
+    "Reply-To mismatch",
+    `From: HDFC Alert <noreply@hdfcbank.com>\nReply-To: collect@gmail.com\nSubject: Account blocked\n\nYour HDFC account is blocked. Unblock at http://hdfc-unblock.xyz`,
+  ],
+  [
+    "SPF fail",
+    `From: Income Tax Dept <refund@incometax.gov.in>\nAuthentication-Results: mx.example.com; spf=fail smtp.mailfrom=incometax.gov.in\nSubject: Tax refund of Rs 18,500 pending\n\nSubmit bank details at http://incometax-refund.tk/claim`,
+  ],
+];
+
+function renderScanResult(container, scan, sessionId, label) {
+  clear(container);
+  const head = el("div", "session-row");
+  head.style.marginBottom = "8px";
+  const levelClass = { CRITICAL: "CRITICAL", HIGH: "HIGH", MEDIUM: "MEDIUM", LOW: "LOW", INVALID: "neutral" }[scan.riskLevel] || "LOW";
+  head.appendChild(el("span", `chip ${levelClass}`, scan.riskLevel));
+  head.appendChild(el("span", "chip neutral", scan.category || "—"));
+  head.appendChild(el("span", "chip neutral", `score ${scan.riskScore}/100`));
+  if (sessionId) head.appendChild(el("span", "chip technical", "→ correlated"));
+  container.appendChild(head);
+
+  if (scan.indicators && scan.indicators.length) {
+    const list = el("ul");
+    list.style.cssText = "margin:6px 0 0;padding-left:18px;font-size:12px;color:var(--text-secondary)";
+    scan.indicators.forEach((ind) => {
+      const li = el("li", null, ind);
+      li.style.marginBottom = "3px";
+      list.appendChild(li);
+    });
+    container.appendChild(list);
+  } else {
+    container.appendChild(el("div", "meta", `No suspicious signals — ${label} appears clean.`));
+  }
+
+  if (scan.subject) {
+    const row = el("div", "meta");
+    row.style.marginTop = "6px";
+    [["From", scan.fromDomain || "—"], ["SPF", scan.spfResult || "?"], ["DKIM", scan.dkimResult || "?"]].forEach(([k, v]) => {
+      const s = el("span"); s.appendChild(document.createTextNode(`${k}: `)); s.appendChild(el("b", null, v)); s.style.marginRight = "14px"; row.appendChild(s);
+    });
+    container.appendChild(row);
+  }
+
+  if (sessionId) {
+    const note = el("div", "meta");
+    note.style.marginTop = "6px";
+    note.textContent = "Ingested — check incidents below ↓";
+    container.appendChild(note);
+    refreshAll();
+  }
+}
+
+function setupUrlScanner() {
+  const form = byId("urlScanForm");
+  const input = byId("urlScanInput");
+  const result = byId("urlScanResult");
+  const samples = byId("urlScanSamples");
+
+  URL_SCAN_SAMPLES.forEach(([label, url]) => {
+    const btn = el("button", null, label);
+    btn.type = "button";
+    btn.addEventListener("click", () => { input.value = url; form.requestSubmit(); });
+    samples.appendChild(btn);
+  });
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const url = input.value.trim();
+    if (!url) return;
+    clear(result);
+    result.appendChild(el("div", "meta", "Scanning…"));
+    try {
+      const data = await api("POST", "/api/scan/url", { url });
+      renderScanResult(result, data.scan, data.sessionId, "URL");
+    } catch (err) {
+      clear(result);
+      result.appendChild(el("div", "error", `Scan failed: ${err.message}`));
+    }
+  });
+}
+
+function setupEmailScanner() {
+  const form = byId("emailScanForm");
+  const input = byId("emailScanInput");
+  const result = byId("emailScanResult");
+  const samples = byId("emailScanSamples");
+
+  EMAIL_SCAN_SAMPLES.forEach(([label], idx) => {
+    const btn = el("button", null, label);
+    btn.type = "button";
+    btn.addEventListener("click", () => { input.value = EMAIL_SCAN_SAMPLES[idx][1]; form.requestSubmit(); });
+    samples.appendChild(btn);
+  });
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const rawEmail = input.value.trim();
+    if (!rawEmail) return;
+    clear(result);
+    result.appendChild(el("div", "meta", "Analysing…"));
+    try {
+      const data = await api("POST", "/api/scan/email", { rawEmail });
+      renderScanResult(result, data.scan, data.sessionId, "Email");
+    } catch (err) {
+      clear(result);
+      result.appendChild(el("div", "error", `Analysis failed: ${err.message}`));
+    }
+  });
+}
+
 function start() {
   setupTheme();
   setupKey();
   setupChat();
   renderScenarios();
+  setupUrlScanner();
+  setupEmailScanner();
   refreshAll();
+  setInterval(refreshAll, 8000);
 }
 
 window.addEventListener("load", start);

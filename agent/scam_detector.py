@@ -12,6 +12,8 @@ PHONE_PATTERN = re.compile(r"\+?\d[\d -]{8,14}\d")
 BANK_PATTERN = re.compile(r"\b\d{9,18}\b")
 IFSC_PATTERN = re.compile(r"\b[A-Z]{4}0[0-9A-Z]{6}\b")
 OTP_PATTERN = re.compile(r"\b(?:otp|one\s*time\s*password|verification\s*code)\b", re.IGNORECASE)
+# A crypto address in an unsolicited message is as strong a signal as a UPI handle.
+CRYPTO_PATTERN = re.compile(r"\b(?:bc1|[13])[a-zA-HJ-NP-Z0-9]{25,42}\b|\b0x[a-fA-F0-9]{40}\b")
 
 
 KEYWORD_WEIGHTS: Dict[str, int] = {
@@ -48,6 +50,14 @@ KEYWORD_WEIGHTS: Dict[str, int] = {
     "warrant": 3,
     "cbi": 3,
     "narcotics": 3,
+    "bitcoin": 2,
+    "btc": 2,
+    "usdt": 2,
+    "crypto": 2,
+    "doubling": 3,
+    "guaranteed": 2,
+    "investment": 2,
+    "profit": 2,
     "parcel": 2,
     "aadhaar": 2,
 }
@@ -113,6 +123,11 @@ class ScamDetector:
             score += 2
             triggers.append("ifsc")
 
+        if CRYPTO_PATTERN.search(combined):
+            score += 4
+            triggers.append("wallet")
+            suspicious.append("wallet")
+
         # Feature 11: vernacular scam vocabulary scores on the same scale as English.
         vernacular = multilingual_scan(combined)
         language = detect_language(combined)
@@ -158,6 +173,8 @@ class ScamDetector:
             return "LOTTERY_SCAM"
         if "refund" in suspicious or "cashback" in suspicious:
             return "REFUND_SCAM"
+        if "wallet" in suspicious or "bitcoin" in suspicious or "crypto" in suspicious:
+            return "CRYPTO_SCAM"
         if "bank" in lowered or "account" in lowered:
             return "BANK_FRAUD"
         return "GENERIC_SCAM"
