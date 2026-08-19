@@ -11,7 +11,12 @@ from pydantic import BaseModel
 
 from agent.behavior_analyzer import BehaviorAnalyzer
 from agent.intelligence_extractor import extract_intelligence
-from agent.llm_clients import OpenRouterClient, list_free_models, model_health_snapshot
+from agent.llm_clients import (
+    GROQ_BASE,
+    OpenRouterClient,
+    list_free_models,
+    model_health_snapshot,
+)
 from agent.multilingual import detect_language
 from agent.notes import build_agent_notes
 from agent.personas import assign_persona
@@ -63,6 +68,9 @@ EXTENDED_RESPONSE = settings.extended_response
 
 OPENROUTER_API_KEY = settings.openrouter_api_key
 OPENROUTER_MODELS = settings.openrouter_models
+GROQ_API_KEY = settings.groq_api_key
+GROQ_MODELS = settings.groq_models
+GROQ_REASONING_EFFORT = settings.groq_reasoning_effort
 AGENT_MAX_HISTORY_MESSAGES = settings.agent_max_history_messages
 LLM_TIMEOUT_SECONDS = settings.llm_timeout_seconds
 REQUEST_TIMEOUT_BUDGET_SECONDS = max(5, settings.request_timeout_budget_seconds)
@@ -164,6 +172,16 @@ def _require_api_key(x_api_key: Optional[str]) -> None:
 
 
 def _llm_client() -> Optional[OpenRouterClient]:
+    # Groq first when configured: its free tier is an order of magnitude larger than
+    # OpenRouter's 50/day, which the honey-pot exhausts in one afternoon of testing.
+    if GROQ_API_KEY:
+        return OpenRouterClient(
+            api_key=GROQ_API_KEY,
+            models=GROQ_MODELS,
+            timeout_seconds=LLM_TIMEOUT_SECONDS,
+            base_url=GROQ_BASE,
+            reasoning_effort=GROQ_REASONING_EFFORT,
+        )
     if not OPENROUTER_API_KEY:
         return None
     return OpenRouterClient(
@@ -335,13 +353,16 @@ async def dashboard_map() -> List[DashboardMapPoint]:
 @app.get("/dashboard/api/models")
 async def dashboard_models():
     """Configured free-model chain plus what OpenRouter currently advertises as free."""
-    live = list_free_models()
+    provider = "groq" if GROQ_API_KEY else "openrouter"
+    configured = list(GROQ_MODELS if GROQ_API_KEY else OPENROUTER_MODELS)
+    live = [] if GROQ_API_KEY else list_free_models()
     return {
-        "configured": list(OPENROUTER_MODELS),
-        "configuredAvailable": [m for m in OPENROUTER_MODELS if m in live] if live else [],
+        "provider": provider,
+        "configured": configured,
+        "configuredAvailable": [m for m in configured if m in live] if live else [],
         "liveFreeModels": live,
         "health": model_health_snapshot(),
-        "apiKeyConfigured": bool(OPENROUTER_API_KEY),
+        "apiKeyConfigured": bool(GROQ_API_KEY or OPENROUTER_API_KEY),
     }
 
 

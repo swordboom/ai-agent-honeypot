@@ -13,6 +13,7 @@ from fastapi import HTTPException
 os.environ["HONEY_POT_API_KEY"] = "test-api-key"
 os.environ["API_KEY"] = "test-api-key"
 os.environ["OPENROUTER_API_KEY"] = ""
+os.environ["GROQ_API_KEY"] = ""
 os.environ["ENABLE_LLM_EXTRACTION"] = "false"
 
 import main  # noqa: E402
@@ -252,6 +253,53 @@ class HoneypotTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(client.chat([{"role": "user", "content": "x"}], 0.5, 20))
             self.assertEqual(len(calls), 1, calls)
             self.assertGreater(llm_clients.model_health_snapshot()["chainBlockedSeconds"], 0)
+        finally:
+            llm_clients.requests.post, llm_clients._health = original_post, original_health
+
+    def test_groq_uses_its_own_url_wire_format_and_quota_scope(self):
+        """Groq is the same OpenAI wire format at a different base URL, but it rejects
+        the legacy max_tokens on reasoning models and its daily cap must not mute
+        OpenRouter (or vice versa)."""
+        import agent.llm_clients as llm_clients
+
+        class _Response:
+            def __init__(self, status_code, text="", headers=None):
+                self.status_code, self.text, self.headers = status_code, text, headers or {}
+
+            def json(self):
+                return {"choices": [{"message": {"content": "hi"}}]}
+
+        seen = []
+        original_post, original_health = llm_clients.requests.post, llm_clients._health
+        llm_clients._health = llm_clients._ModelHealth()
+
+        def fake_post(url, headers=None, json=None, timeout=None):
+            seen.append((url, json))
+            if "groq" in url:
+                return _Response(429, "Rate limit reached ... requests per day (RPD)")
+            return _Response(200)
+
+        llm_clients.requests.post = fake_post
+        try:
+            groq = llm_clients.OpenRouterClient(
+                api_key="k",
+                models=("openai/gpt-oss-120b",),
+                base_url=llm_clients.GROQ_BASE,
+                reasoning_effort="low",
+            )
+            self.assertIsNone(groq.chat([{"role": "user", "content": "x"}], 0.5, 20))
+            url, payload = seen[0]
+            self.assertEqual(url, llm_clients.GROQ_BASE + "/chat/completions")
+            self.assertEqual(payload["max_completion_tokens"], 20)
+            self.assertNotIn("max_tokens", payload)
+            self.assertEqual(payload["reasoning_effort"], "low")
+
+            # Groq's daily cap is scoped to Groq: OpenRouter still gets tried.
+            self.assertIsNone(groq.chat([{"role": "user", "content": "x"}], 0.5, 20))
+            self.assertEqual(len(seen), 1, "groq chain must be blocked")
+            router = llm_clients.OpenRouterClient(api_key="k", models=("a/b:free",))
+            self.assertEqual(router.chat([{"role": "user", "content": "x"}], 0.5, 20), "hi")
+            self.assertEqual(seen[-1][1]["max_tokens"], 20)
         finally:
             llm_clients.requests.post, llm_clients._health = original_post, original_health
 

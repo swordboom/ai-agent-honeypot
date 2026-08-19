@@ -1,7 +1,7 @@
 import os
 from dataclasses import dataclass
 
-from agent.llm_clients import DEFAULT_FREE_MODELS
+from agent.llm_clients import DEFAULT_FREE_MODELS, DEFAULT_GROQ_MODELS
 
 
 def load_dotenv(path: str = ".env") -> None:
@@ -69,6 +69,10 @@ class Settings:
     openrouter_api_key: str
     openrouter_models: tuple
 
+    groq_api_key: str
+    groq_models: tuple
+    groq_reasoning_effort: str
+
     agent_max_history_messages: int
     llm_timeout_seconds: int
     request_timeout_budget_seconds: int
@@ -97,6 +101,9 @@ class Settings:
             extended_response=_env_bool("HONEY_POT_EXTENDED_RESPONSE", False),
             openrouter_api_key=os.getenv("OPENROUTER_API_KEY") or "",
             openrouter_models=_env_list("OPENROUTER_MODELS", DEFAULT_FREE_MODELS),
+            groq_api_key=os.getenv("GROQ_API_KEY") or "",
+            groq_models=_env_list("GROQ_MODELS", DEFAULT_GROQ_MODELS),
+            groq_reasoning_effort=os.getenv("GROQ_REASONING_EFFORT") or "low",
             agent_max_history_messages=_env_int("AGENT_MAX_HISTORY_MESSAGES", 12),
             llm_timeout_seconds=_env_int("LLM_TIMEOUT_SECONDS", 12),
             request_timeout_budget_seconds=_env_int("REQUEST_TIMEOUT_BUDGET_SECONDS", 26),

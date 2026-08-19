@@ -158,7 +158,7 @@ honeypot replies from its deterministic per-language fallback.
 
 ```powershell
 Copy-Item .env.example .env
-# then edit .env to set API_KEY (enables x-api-key) and/or OPENROUTER_API_KEY (live LLM replies)
+# then edit .env to set API_KEY (enables x-api-key) and GROQ_API_KEY (live LLM replies)
 ```
 
 ### 3. Run
@@ -379,10 +379,19 @@ runs with none of them.
 - `HONEY_POT_API_KEY` or `API_KEY` — if set, `POST /api/*` requires a matching
   `x-api-key` header. `HONEY_POT_API_KEY` takes precedence.
 
-### LLM — OpenRouter free models (recommended, not required)
-- `OPENROUTER_API_KEY` — get one at <https://openrouter.ai/keys>. Without it, replies use
-  the deterministic per-language fallback.
+### LLM — Groq or OpenRouter (recommended, not required)
+Both speak the OpenAI chat-completions wire format, so one client serves both. Groq is
+tried first when its key is set; OpenRouter's free tier caps at 50 requests/day per
+account, which one afternoon of testing exhausts.
+- `GROQ_API_KEY` — get one at <https://console.groq.com/keys>.
+- `GROQ_MODELS` — comma-separated override. Default `openai/gpt-oss-120b`.
+- `GROQ_REASONING_EFFORT` — `low` (default) / `medium` / `high`. Higher settings spend the
+  reply budget on chain-of-thought and get rejected by `sanitize_reply`.
+- `OPENROUTER_API_KEY` — fallback provider, used only when `GROQ_API_KEY` is empty.
+  Get one at <https://openrouter.ai/keys>.
 - `OPENROUTER_MODELS` — comma-separated override of the free-model fallback chain.
+
+Without either key, replies use the deterministic per-language fallback.
 
 All three LLM stages (reply, behaviour analysis, structured extraction) go through one
 `OpenRouterClient`. It walks the free-model chain until one answers, then sticks to it. A
@@ -426,6 +435,7 @@ currently advertises as free.
 1. Create a Render **Web Service** from this repo and select **Docker**.
 2. Add environment variables in Render:
    - `API_KEY` (recommended, to lock down `POST /api/*`)
-   - `OPENROUTER_API_KEY` (optional — without it replies use the scripted fallback)
+   - `GROQ_API_KEY` (optional — without it replies use the scripted fallback)
+   - `OPENROUTER_API_KEY` (optional fallback provider)
 3. Deploy. Render provides a public URL; the SOC console, dashboard and console are all
    served from it.

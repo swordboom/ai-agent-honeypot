@@ -26,6 +26,7 @@ import unittest
 os.environ["HONEY_POT_API_KEY"] = "test-api-key"
 os.environ["API_KEY"] = "test-api-key"
 os.environ["OPENROUTER_API_KEY"] = ""
+os.environ["GROQ_API_KEY"] = ""
 os.environ["ENABLE_LLM_EXTRACTION"] = "false"
 
 import main  # noqa: E402

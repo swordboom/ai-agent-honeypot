@@ -11,6 +11,13 @@ import requests
 logger = logging.getLogger(__name__)
 
 OPENROUTER_BASE = "https://openrouter.ai/api/v1"
+# Groq speaks the same OpenAI chat-completions wire format, so it is the same client
+# with a different base URL and key.
+GROQ_BASE = "https://api.groq.com/openai/v1"
+
+# ponytail: one model. Groq's free tier gives gpt-oss-120b a real daily budget and it
+# answers in character, so a fallback chain buys nothing until this one starts failing.
+DEFAULT_GROQ_MODELS: Tuple[str, ...] = ("openai/gpt-oss-120b",)
 
 # Free chat-capable models from openrouter_free_models.txt, ordered by usefulness for
 # short multilingual roleplay + JSON extraction. Embedding / rerank / content-safety
@@ -47,17 +54,17 @@ class _ModelHealth:
         self._dead: set = set()
         self._last_ok: Optional[str] = None
         self._lock = threading.Lock()
-        self._chain_blocked_until = 0.0
+        # Keyed by provider base URL: one provider's daily cap must not mute the other.
+        self._chain_blocked_until: Dict[str, float] = {}
 
-    def usable(self, models: List[str]) -> List[str]:
+    def usable(self, models: List[str], scope: str = "") -> List[str]:
         now = time.time()
         with self._lock:
             # The free tier caps requests per DAY per account, not per model. Once
             # that trips, every slug returns 429 and walking the chain costs nine
             # round-trips per reply for nothing.
-            if now < self._chain_blocked_until:
+            if now < self._chain_blocked_until.get(scope, 0.0):
                 return []
-        with self._lock:
             live = [m for m in models if m not in self._dead and self._benched.get(m, 0.0) < now]
             # Stick to the last model that worked: fewer cold-start failures per request.
             if self._last_ok in live:
@@ -65,10 +72,12 @@ class _ModelHealth:
                 live.insert(0, self._last_ok)
             return live
 
-    def block_chain(self, seconds: float) -> None:
+    def block_chain(self, seconds: float, scope: str = "") -> None:
         """Account-level quota exhausted: stop trying every model until it resets."""
         with self._lock:
-            self._chain_blocked_until = max(self._chain_blocked_until, time.time() + max(60.0, seconds))
+            self._chain_blocked_until[scope] = max(
+                self._chain_blocked_until.get(scope, 0.0), time.time() + max(60.0, seconds)
+            )
 
     def mark_ok(self, model: str) -> None:
         with self._lock:
@@ -89,7 +98,9 @@ class _ModelHealth:
                 "lastWorkingModel": self._last_ok,
                 "retiredModels": sorted(self._dead),
                 "cooldownModels": sorted(m for m, until in self._benched.items() if until > now),
-                "chainBlockedSeconds": max(0, int(self._chain_blocked_until - now)),
+                "chainBlockedSeconds": max(
+                    [0] + [int(until - now) for until in self._chain_blocked_until.values() if until > now]
+                ),
             }
 
 
@@ -118,7 +129,9 @@ _META_NARRATION = (
     "system prompt",
 )
 
-_BLOCKED_MARKERS = ("as an ai", "language model", "honeypot", "bot")
+# Word-boundary, not substring: a fluent reply saying "both accounts" or "bottom of
+# the page" is not a persona break.
+_BLOCKED_RE = re.compile(r"\bas an ai\b|\blanguage model\b|\bhoney ?pot\b|\bbots?\b", re.IGNORECASE)
 
 _THINK_RE = re.compile(r"(?is)<think>.*?</think>")
 
@@ -128,7 +141,7 @@ def sanitize_reply(text: Optional[str], max_chars: int = 240) -> str:
         return ""
     cleaned = " ".join(_THINK_RE.sub(" ", text).replace("\n", " ").strip().split())
     lower = cleaned.lower()
-    if any(marker in lower for marker in _BLOCKED_MARKERS):
+    if _BLOCKED_RE.search(cleaned):
         return ""
     if any(marker in lower for marker in _META_NARRATION):
         return ""
@@ -149,12 +162,21 @@ def extract_json_object(text: str) -> Optional[Dict]:
         return None
 
 
+# OpenRouter says "free-models-per-day"; Groq says "requests per day (RPD)" / "TPD".
+_DAILY_CAP_RE = re.compile(r"per[-_ ]day|\b[RT]PD\b", re.IGNORECASE)
+
+
 def _reset_seconds(resp, default: float = 900.0) -> float:
-    """Seconds until the account quota resets, from OpenRouter's header if present."""
-    raw = resp.headers.get("X-RateLimit-Reset") if hasattr(resp, "headers") else None
+    """Seconds until the account quota resets, from the provider's header if present."""
+    headers = getattr(resp, "headers", {}) or {}
     try:
-        # Epoch milliseconds.
-        return max(60.0, (float(raw) / 1000.0) - time.time())
+        # OpenRouter: epoch milliseconds.
+        return max(60.0, (float(headers.get("X-RateLimit-Reset")) / 1000.0) - time.time())
+    except (TypeError, ValueError):
+        pass
+    try:
+        # Groq: plain seconds.
+        return max(60.0, float(headers.get("Retry-After")))
     except (TypeError, ValueError):
         return default
 
@@ -162,10 +184,11 @@ def _reset_seconds(resp, default: float = 900.0) -> float:
 @dataclass(frozen=True)
 class OpenRouterClient:
     """
-    Single LLM entry point. Tries each free model in order until one answers.
+    Single LLM entry point. Tries each model in order until one answers.
 
-    OpenRouter speaks the OpenAI chat-completions wire format, so `messages` and
-    `response_format` are passed straight through.
+    Both OpenRouter and Groq speak the OpenAI chat-completions wire format, so
+    `messages` and `response_format` are passed straight through and the only
+    difference between providers is `base_url`, the key, and the model list.
     """
 
     api_key: str
@@ -173,6 +196,9 @@ class OpenRouterClient:
     timeout_seconds: int = 12
     referer: str = "https://github.com/agentic-honey-pot"
     title: str = "Agentic Honey-Pot"
+    base_url: str = OPENROUTER_BASE
+    # gpt-oss only. "low" keeps the reasoning budget from eating the reply.
+    reasoning_effort: str = ""
 
     def chat(
         self,
@@ -192,32 +218,35 @@ class OpenRouterClient:
             "X-Title": self.title,
         }
 
-        for model in _health.usable(list(self.models)):
+        for model in _health.usable(list(self.models), scope=self.base_url):
             payload: Dict[str, object] = {
                 "model": model,
                 "messages": messages,
                 "temperature": temperature,
-                "max_tokens": max_tokens,
+                # Groq rejects the legacy `max_tokens` on reasoning models.
+                ("max_completion_tokens" if self.base_url == GROQ_BASE else "max_tokens"): max_tokens,
             }
             if response_format:
                 payload["response_format"] = response_format
+            if self.reasoning_effort:
+                payload["reasoning_effort"] = self.reasoning_effort
 
             try:
                 resp = requests.post(
-                    f"{OPENROUTER_BASE}/chat/completions",
+                    f"{self.base_url}/chat/completions",
                     headers=headers,
                     json=payload,
                     timeout=self.timeout_seconds,
                 )
             except Exception as exc:
-                logger.warning("OpenRouter request failed model=%s: %s", model, exc)
+                logger.warning("LLM request failed model=%s: %s", model, exc)
                 _health.mark_failed(model, None)
                 continue
 
             if resp.status_code >= 400:
-                logger.warning("OpenRouter model=%s status=%s body=%s", model, resp.status_code, resp.text[:200])
-                if resp.status_code == 429 and "per-day" in resp.text:
-                    _health.block_chain(_reset_seconds(resp))
+                logger.warning("LLM model=%s status=%s body=%s", model, resp.status_code, resp.text[:200])
+                if resp.status_code == 429 and _DAILY_CAP_RE.search(resp.text):
+                    _health.block_chain(_reset_seconds(resp), scope=self.base_url)
                     _health.mark_failed(model, resp.status_code)
                     return None
                 _health.mark_failed(model, resp.status_code)
@@ -226,7 +255,7 @@ class OpenRouterClient:
             try:
                 content = resp.json()["choices"][0]["message"]["content"]
             except Exception as exc:
-                logger.warning("OpenRouter bad payload model=%s: %s", model, exc)
+                logger.warning("LLM bad payload model=%s: %s", model, exc)
                 _health.mark_failed(model, None)
                 continue
 
