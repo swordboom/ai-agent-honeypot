@@ -32,8 +32,9 @@ from services.reporting import session_report, threat_report  # noqa: E402
 class _DummyLLM:
     """Stands in for OpenRouterClient; records the prompt it was handed."""
 
-    def __init__(self, reply):
+    def __init__(self, reply, provider="openrouter"):
         self.api_key = "x"
+        self.provider = provider
         self._reply = reply
         self.last_messages = None
 
@@ -358,6 +359,70 @@ class HoneypotTests(unittest.IsolatedAsyncioTestCase):
         fallback, provider = generate_agent_reply(state, None, llm=None, max_history=12)
         self.assertEqual(provider, "rules")
         self.assertTrue(any("ऀ" <= ch <= "ॿ" for ch in fallback), fallback)
+
+    async def test_reply_llm_is_not_starved_by_the_earlier_llm_stages(self):
+        """Behaviour analysis and structured extraction call the LLM before the reply
+        does, and they spend real time. If the reply reserves as much of the request
+        budget as they do, it can never fit: every reply silently drops to rules and
+        the honey-pot looks like it has no LLM at all."""
+        reserves = []
+        original_budget = main._has_time_budget
+        original_client = main._llm_client
+        dummy = _DummyLLM("Which UPI id should I send it to?", provider="groq")
+
+        main._has_time_budget = lambda deadline, reserve: (
+            reserves.append(reserve) or original_budget(deadline, reserve)
+        )
+        main._llm_client = lambda: dummy
+        try:
+            event = MessageEvent(
+                sessionId="budget-session",
+                message=Message(
+                    sender="scammer",
+                    text="send 1000 rupees to my upi id 8101010010@upi right now",
+                    timestamp=int(time.time()),
+                ),
+                conversationHistory=[],
+                metadata=Metadata(channel="sms"),
+            )
+            await main.handle_message(event, x_api_key="test-api-key")
+        finally:
+            main._has_time_budget = original_budget
+            main._llm_client = original_client
+
+        # The reply gate is the last budget check in the request.
+        self.assertLessEqual(
+            reserves[-1],
+            main.LLM_TIMEOUT_SECONDS + 1,
+            f"reply must reserve one LLM call, not two; reserves seen: {reserves}",
+        )
+        state = main.session_manager.get("budget-session")
+        self.assertEqual(state.reply_provider, "groq", "reply must come from the LLM, not rules")
+
+    def test_model_reply_is_cut_before_it_writes_the_scammers_next_message(self):
+        """gpt-oss answers its own question and continues as the scammer, inventing a
+        link and a UPI id. Sending fabricated indicators back under the persona's name
+        is an instant tell."""
+        from agent.reply_agent import clip_to_one_turn
+
+        leak = (
+            "Can you send the exact link and the full UPI details again? Also, a phone "
+            "number I can call back?Sure, here's the link: "
+            "https://payverify.example.com/confirm?token=abc123 My UPI ID is 810101"
+        )
+        clipped = clip_to_one_turn(leak)
+        self.assertNotIn("payverify.example.com", clipped)
+        self.assertNotIn("810101", clipped)
+        self.assertTrue(clipped.endswith("call back?"), clipped)
+
+        # A normal two-sentence reply survives intact.
+        ok = "Hi, who is this and what is this about? I am busy, please tell me quickly."
+        self.assertEqual(clip_to_one_turn(ok), ok)
+
+        # An over-long ramble is cut at a sentence boundary, not mid-word.
+        rambling = " ".join(["Please confirm the reference number."] * 12)
+        self.assertTrue(clip_to_one_turn(rambling).endswith("."))
+        self.assertLessEqual(len(clip_to_one_turn(rambling).split()), 35)
 
     # --- Feature 3: incidents -------------------------------------------------
 

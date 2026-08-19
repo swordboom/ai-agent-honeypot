@@ -64,6 +64,7 @@ function prettyLabel(code) {
 function providerLabel(p) {
   if (!p || p === "rules") return "Adaptive rule engine";
   if (p === "openrouter") return "AI model (OpenRouter)";
+  if (p === "groq") return "AI model (Groq)";
   return p;
 }
 

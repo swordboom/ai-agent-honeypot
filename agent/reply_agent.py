@@ -1,4 +1,5 @@
 import hashlib
+import re
 from typing import Dict, List, Optional, Tuple
 
 from agent.llm_clients import OpenRouterClient, sanitize_reply
@@ -35,6 +36,51 @@ def build_tactical_hint(missing_targets: List[str]) -> str:
     return "Keep them engaged with short clarifying questions and avoid ending the conversation."
 
 
+# A sentence end butted straight against a capital is where the model stopped being
+# the victim and started writing the scammer's side of the exchange.
+_SPEAKER_FLIP = re.compile(r"([.!?])(?=[A-Z])")
+_SENTENCE_ENDS = (".", "?", "!", "।")
+
+
+def clip_to_one_turn(reply: str, max_words: int = 35) -> str:
+    """
+    Cut a model reply back to the single turn the system prompt asked for.
+
+    Left alone, the model answers its own question and invents the scammer's next
+    message with it - "...a number I can call back?Sure, here is the link: http://...
+    My UPI ID is 8101..." - which hands the scammer a fabricated link under the
+    persona's name. The invented indicators never reach the intel store (only
+    `sender == "scammer"` text is extracted), but sending them is an instant tell.
+    """
+    flip = _SPEAKER_FLIP.search(reply)
+    if flip:
+        reply = reply[: flip.end()]
+
+    words = reply.split()
+    if len(words) <= max_words:
+        return reply.strip()
+
+    clipped = " ".join(words[:max_words])
+    end = max(clipped.rfind(mark) for mark in _SENTENCE_ENDS)
+    return (clipped[: end + 1] if end > 0 else clipped).strip()
+
+
+def _tactical_hint_for(state: SessionState, missing_targets: List[str]) -> str:
+    """
+    Extraction goals only apply once there is something to extract from.
+
+    On an opener like "hello" nothing has been claimed yet, so the missing-intel list
+    is everything, and `build_tactical_hint` would have the persona demand a UPI
+    handle out of nowhere. A real person asks who is calling first.
+    """
+    if not state.scam_detected:
+        return (
+            "You do not know what this is about yet. Ask who they are and what this "
+            "concerns. Do NOT ask for payment details, links, or reference numbers yet."
+        )
+    return build_tactical_hint(missing_targets)
+
+
 def _system_prompt(persona: Persona, metadata: Optional[Metadata], state: SessionState, tactical_hint: str) -> str:
     channel = metadata.channel if metadata and metadata.channel else "Unknown"
     locale = metadata.locale if metadata and metadata.locale else "Unknown"
@@ -48,7 +94,7 @@ def _system_prompt(persona: Persona, metadata: Optional[Metadata], state: Sessio
         "Do not add labels, headings, or meta-commentary — just the reply text itself. "
         f"{reply_language_instruction(state.language)} "
         f"The sender is communicating in: {state.language_name}. "
-        f"Apparent scheme type: {state.scam_category}. "
+        f"Apparent scheme type: {state.scam_category or 'not established yet'}. "
         f"Your character: {persona.display_name}, {persona.age_profile}. "
         f"Your speaking style: {persona.style_rules} "
         f"Your goal in this conversation: {persona.goal_bias} "
@@ -63,7 +109,7 @@ def build_llm_messages(state: SessionState, metadata: Optional[Metadata], max_hi
     messages: List[Dict[str, str]] = [
         {
             "role": "system",
-            "content": _system_prompt(persona, metadata, state, build_tactical_hint(missing)),
+            "content": _system_prompt(persona, metadata, state, _tactical_hint_for(state, missing)),
         }
     ]
 
@@ -454,16 +500,20 @@ def generate_agent_reply(
     max_history: int,
 ) -> Tuple[str, str]:
     """
-    OpenRouter free models generate the reply. `generate_rule_based_reply` is the
-    terminal safety net for when every free model is rate-limited - without it a
-    throttled session would return no reply at all and the engagement would die.
+    The configured LLM provider (Groq, else OpenRouter) generates the reply.
+    `generate_rule_based_reply` is the terminal safety net for when every model is
+    rate-limited - without it a throttled session would return no reply at all and
+    the engagement would die.
     """
     messages = build_llm_messages(state, metadata, max_history=max_history)
 
     if llm and llm.api_key:
         raw = llm.chat(messages, temperature=0.7, max_tokens=120)
-        reply = sanitize_reply(raw)
+        reply = clip_to_one_turn(sanitize_reply(raw))
         if reply:
-            return reply, "openrouter"
+            return reply, llm.provider
 
-    return generate_rule_based_reply(state), "rules"
+    # Fall back to the script that matches the state: an undetected opener gets the
+    # probe, not an extraction prompt about a scam nobody has mentioned yet.
+    fallback = generate_rule_based_reply if state.scam_detected else generate_probe_reply
+    return fallback(state), "rules"

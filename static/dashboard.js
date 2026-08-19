@@ -760,6 +760,7 @@ function renderMap(points) {
 function providerLabel(p) {
   if (!p || p === "rules") return "Adaptive rule engine";
   if (p === "openrouter") return "AI model (OpenRouter)";
+  if (p === "groq") return "AI model (Groq)";
   return p;
 }
 
@@ -776,7 +777,7 @@ function renderModels(models) {
   if (!models.apiKeyConfigured) {
     const row = el("tr");
     const cell = el("td", "empty",
-      "OPENROUTER_API_KEY not set — adaptive rule engine handles all replies (multi-turn, multilingual, category-aware)");
+      "No LLM key set (GROQ_API_KEY / OPENROUTER_API_KEY) — adaptive rule engine handles all replies (multi-turn, multilingual, category-aware)");
     cell.colSpan = 2;
     row.appendChild(cell);
     body.appendChild(row);

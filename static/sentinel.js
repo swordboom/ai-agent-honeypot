@@ -55,6 +55,11 @@ async function apiCall(method, path, body) {
   const opts = { method, headers: apiHeaders() };
   if (body !== undefined) opts.body = JSON.stringify(body);
   const res = await fetch(path, opts);
+  if (res.status === 401) {
+    /* The /api/* routes need the server's API_KEY. Saying so beats a bare 401:
+       the input is on the Architecture view and easy to miss. */
+    throw new Error('401 — set x-api-key (Architecture view) to your server API_KEY');
+  }
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`${res.status} ${text.slice(0, 200)}`);
@@ -65,6 +70,7 @@ async function apiCall(method, path, body) {
 function providerLabel(p) {
   if (!p || p === 'rules') return 'Rule engine';
   if (p === 'openrouter') return 'AI (OpenRouter)';
+  if (p === 'groq') return 'AI (Groq)';
   return p;
 }
 
@@ -203,7 +209,8 @@ async function refresh() {
       await fetchAll();
       renderOps();
     } else if (APP.view === 'honeypot') {
-      const threat = await apiCall('GET', '/api/report/threat').catch(() => null);
+      /* No .catch here: a swallowed 401 shows "ok" beside an empty panel forever. */
+      const threat = await apiCall('GET', '/api/report/threat');
       if (threat) renderHpIncidents(threat.incidents || []);
     } else if (APP.view === 'incidents') {
       await fetchAll();

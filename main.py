@@ -191,6 +191,24 @@ def _llm_client() -> Optional[OpenRouterClient]:
     )
 
 
+def _aux_llm_client() -> Optional[OpenRouterClient]:
+    """
+    Client for the enrichment stages (behaviour analysis, structured extraction).
+
+    These are not the conversation. Putting them on OpenRouter keeps Groq's budget -
+    and, more importantly, the request's time budget - for the reply, which is the
+    only LLM call the scammer actually sees. When OpenRouter is capped its chain
+    block returns instantly, so the enrichment degrades to heuristics at zero cost.
+    """
+    if OPENROUTER_API_KEY:
+        return OpenRouterClient(
+            api_key=OPENROUTER_API_KEY,
+            models=OPENROUTER_MODELS,
+            timeout_seconds=LLM_TIMEOUT_SECONDS,
+        )
+    return _llm_client()
+
+
 def _collect_scammer_texts(event: MessageEvent) -> List[str]:
     texts = [m.text for m in event.conversationHistory if m.sender == "scammer" and m.text]
     if event.message.sender == "scammer" and event.message.text:
@@ -490,6 +508,7 @@ async def handle_message(event: MessageEvent, x_api_key: Optional[str] = Header(
     session_manager.maybe_cleanup()
     _auto_finalize_inactive_sessions(skip_session_id=event.sessionId)
     llm_client = _llm_client()
+    aux_llm_client = _aux_llm_client()
 
     state = session_manager.get_or_create(event.sessionId, _session_factory)
 
@@ -515,7 +534,7 @@ async def handle_message(event: MessageEvent, x_api_key: Optional[str] = Header(
     )
     behavior = behavior_analyzer.analyze(
         incoming_scammer_text,
-        llm_client if allow_behavior_llm else None,
+        aux_llm_client if allow_behavior_llm else None,
     )
 
     # Feature 11: record the language before generating a reply, so the persona
@@ -586,7 +605,7 @@ async def handle_message(event: MessageEvent, x_api_key: Optional[str] = Header(
     ):
         indicator_payload, extended_payload = extract_structured_intelligence(
             text=event.message.text,
-            llm=llm_client,
+            llm=aux_llm_client,
             timeout_hint_seconds=LLM_TIMEOUT_SECONDS,
         )
         session_manager.update_intel(
@@ -597,12 +616,19 @@ async def handle_message(event: MessageEvent, x_api_key: Optional[str] = Header(
 
     session_manager.set_strategy_state(state, infer_strategy_state(state))
 
-    allow_reply_llm = state.scam_detected and llm_call_gate.allow(
+    # The reply reserves one call, not two. The behaviour and extraction gates above
+    # already reserve `2 * timeout` so that whatever they spend still leaves room for
+    # this one - asking for two timeouts here as well meant the reply needed 25s of a
+    # 26s budget and lost to any prior LLM call, silently falling back to rules.
+    # Not gated on scam_detected: the persona has to hold up on "hello" too, and a
+    # scripted probe against an opening line is exactly where the honey-pot reads as
+    # a bot. generate_agent_reply falls back to the right script if the model fails.
+    allow_reply_llm = llm_call_gate.allow(
         "reply",
         scammer_message_index=incoming_scammer_index,
-    ) and _has_time_budget(request_deadline, (2 * LLM_TIMEOUT_SECONDS) + 1)
+    ) and _has_time_budget(request_deadline, LLM_TIMEOUT_SECONDS + 1)
 
-    if state.scam_detected and allow_reply_llm:
+    if allow_reply_llm:
         reply, provider = generate_agent_reply(
             state,
             event.metadata,

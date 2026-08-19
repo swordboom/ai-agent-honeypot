@@ -200,6 +200,10 @@ class OpenRouterClient:
     # gpt-oss only. "low" keeps the reasoning budget from eating the reply.
     reasoning_effort: str = ""
 
+    @property
+    def provider(self) -> str:
+        return "groq" if self.base_url == GROQ_BASE else "openrouter"
+
     def chat(
         self,
         messages: List[Dict[str, str]],
